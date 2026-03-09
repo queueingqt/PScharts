@@ -45,6 +45,28 @@ async function updateMatchCache(matchId, scoreData) {
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ── Match type detection ──────────────────────────────────────────────────────
+function detectMatchType(name) {
+  const n = (name || '').toUpperCase();
+  if (/\bIDPA\b/.test(n)) return 'IDPA';
+  if (/\bIPSC\b/.test(n)) return 'IPSC';
+  if (/\bSTEEL[\s-]?CHALLENGE\b|\bSCSA\b/.test(n)) return 'Steel Challenge';
+  if (/\b3[\s-]?GUN\b/.test(n)) return '3-Gun';
+  if (/\bPCSL\b/.test(n)) return 'PCSL';
+  if (/\bICORE\b/.test(n)) return 'ICORE';
+  if (/\bUSPSA\b/.test(n)) return 'USPSA';
+  // Common USPSA division keywords strongly imply USPSA
+  if (/\b(CARRY[\s-]?OPTICS|CARRYOPTICS|SINGLE[\s-]?STACK|SINGLESTACK|LIMITED[\s-]?OPTICS|LIMITEDOPTICS)\b/.test(n)) return 'USPSA';
+  return 'Unknown';
+}
+
+// Types confirmed as non-USPSA — skip score fetching for these
+const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE']);
+
+function isLikelyUSPSA(matchType) {
+  return !NON_USPSA_TYPES.has(matchType);
+}
+
 // Map the Div abbreviation shown in the results table to the PractiScore URL key.
 // e.g. "CO" → "carryoptics", "L" → "limited"
 function divisionToUrlKey(div) {
@@ -83,6 +105,7 @@ function buildResult(match, score, memberNumber) {
   return {
     match_id:    match.match_id,
     match_name:  match.match_name,
+    match_type:  match.match_type || 'Unknown',
     date:        match.date,
     division:    score.division    || '',
     class_:      score.class_      || '',
@@ -436,24 +459,37 @@ async function fetchScores(memberNumber, name) {
     await waitForTabLoad(tabId);
     await sleep(2500);
 
-    const matchList = await runInTab(tabId, extractMatchList);
-    push(`Found ${matchList.length} match(es).`);
-    console.log('[PScharts] matchList:', JSON.stringify(matchList, null, 2));
+    const rawMatchList = await runInTab(tabId, extractMatchList);
+    push(`Found ${rawMatchList.length} match(es).`);
+    console.log('[PScharts] matchList:', JSON.stringify(rawMatchList, null, 2));
 
-    if (matchList.length === 0) {
+    if (rawMatchList.length === 0) {
       push('No matches found — are you logged into PractiScore?');
       return { results: [], log };
     }
 
-    const uspsaMatches = matchList.filter(m => !/\bidpa\b/i.test(m.match_name));
-    const skipped = matchList.length - uspsaMatches.length;
-    if (skipped > 0) push(`Skipping ${skipped} non-USPSA match(es).`);
+    // Annotate every match with its detected type
+    const matchList = rawMatchList.map(m => ({ ...m, match_type: detectMatchType(m.match_name) }));
 
-    await chrome.storage.local.set({ lastMatchList: uspsaMatches });
+    // Level 1: skip confirmed non-USPSA matches before fetching scores
+    const uspsaMatches = matchList.filter(m => isLikelyUSPSA(m.match_type));
+    const skipped = matchList.length - uspsaMatches.length;
+    if (skipped > 0) {
+      const names = matchList.filter(m => !isLikelyUSPSA(m.match_type)).map(m => `${m.match_name} (${m.match_type})`).join(', ');
+      push(`Skipping ${skipped} non-USPSA match(es): ${names}`);
+    }
+
+    // Save ALL matches (with types) so users can see and manage their full history
+    await chrome.storage.local.set({ lastMatchList: matchList });
 
     push('Fetching scores…');
     const cache = await getCache();
     const results = [];
+
+    // Include non-USPSA matches in results (without scores) for history display
+    for (const m of matchList.filter(m => !isLikelyUSPSA(m.match_type))) {
+      results.push(buildResult(m, {}, memberNumber));
+    }
 
     for (let i = 0; i < uspsaMatches.length; i++) {
       const match = uspsaMatches[i];

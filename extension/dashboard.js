@@ -27,8 +27,16 @@ const matchRowsEl  = document.getElementById('matchRows');
 const tooltipEl    = document.getElementById('tooltip');
 
 // ── Module state ──────────────────────────────────────────────────────────────
-let allResults  = [];
-let currentView = 'ranked'; // 'ranked' | 'all'
+let allResults       = [];
+let currentView      = 'ranked'; // 'ranked' | 'all'
+let deselectedMatches = new Set(); // match IDs manually excluded from charts
+
+const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE']);
+function isLikelyUSPSA(matchType) { return !NON_USPSA_TYPES.has(matchType); }
+
+function saveDeselected() {
+  chrome.storage.local.set({ deselectedMatches: [...deselectedMatches] });
+}
 
 // ── Input lock / edit ─────────────────────────────────────────────────────────
 let _editSnapshot = { member: '', name: '' }; // values before edit started
@@ -96,19 +104,21 @@ saveBtn.addEventListener('click', async () => {
 });
 
 // ── Restore persisted state on load ──────────────────────────────────────────
-chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache'], d => {
+chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache', 'deselectedMatches'], d => {
   if (d.memberNumber) memberInput.value = d.memberNumber;
   if (d.name)         nameInput.value   = d.name;
+  if (d.deselectedMatches) deselectedMatches = new Set(d.deselectedMatches);
 
   // Lock inputs if we already have saved credentials
-  if (d.memberNumber) {
+  if (d.memberNumber || d.name) {
     lockInputs();
   }
 
-  if (d.lastMatchList && d.matchCache) {
+  if (d.lastMatchList) {
+    const cache = d.matchCache || {};
     const restored = d.lastMatchList.map(m => ({
       ...m,
-      ...(d.matchCache[m.match_id] || {}),
+      ...(cache[m.match_id] || {}),
       _cached: true,
     }));
     if (restored.length > 0) {
@@ -116,7 +126,8 @@ chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache']
       renderAll();
       renderMatchList();
       const scored = restored.filter(r => r.overall_pct != null).length;
-      setStatus(`Showing cached data — ${scored}/${restored.length} matches scored. Click Fetch Scores to check for new matches.`, 'success');
+      const uspsa  = restored.filter(r => isLikelyUSPSA(r.match_type || 'Unknown')).length;
+      setStatus(`Showing cached data — ${scored}/${uspsa} USPSA matches scored. Click Fetch Scores to check for new matches.`, 'success');
     }
   }
 });
@@ -135,10 +146,17 @@ document.querySelectorAll('.view-btn').forEach(btn => {
 fetchBtn.addEventListener('click', async () => {
   const memberNumber = memberInput.value.trim().toUpperCase();
   const name         = nameInput.value.trim();
-  if (!memberNumber || !name) { setStatus('Please enter both a member number and your name.', 'error'); return; }
+  if (!memberNumber && !name) { setStatus('Please enter your USPSA member number and/or your name.', 'error'); return; }
+
+  const noMemberWarningEl = document.getElementById('noMemberWarning');
+  if (!memberNumber) {
+    noMemberWarningEl.style.display = 'block';
+  } else {
+    noMemberWarningEl.style.display = 'none';
+  }
 
   // Guard: if credentials differ from what's cached, require going through Save
-  const stored = await chrome.storage.local.get(['memberNumber', 'name', 'matchCache']);
+  const stored = await chrome.storage.local.get(['memberNumber', 'name', 'matchCache', 'lastMatchList']);
   const hasCachedData = stored.matchCache && Object.keys(stored.matchCache).length > 0;
   const credentialsChanged = hasCachedData && (
     memberNumber !== (stored.memberNumber || '').toUpperCase() ||
@@ -185,8 +203,11 @@ fetchBtn.addEventListener('click', async () => {
     renderAll();
     renderMatchList();
 
+    const uspsa  = results.filter(r => isLikelyUSPSA(r.match_type || 'Unknown')).length;
+    const nonUspsa = results.length - uspsa;
     const scored = results.filter(r => r.overall_pct != null).length;
-    setStatus(`Loaded ${results.length} match(es) — ${scored} with scores.`, 'success');
+    const skippedNote = nonUspsa > 0 ? ` · ${nonUspsa} non-USPSA match(es) excluded from charts` : '';
+    setStatus(`Loaded ${uspsa} USPSA match(es) — ${scored} with scores.${skippedNote}`, 'success');
 
   } catch (err) {
     setStatus(`Error: ${err.message}`, 'error');
@@ -201,11 +222,18 @@ fetchBtn.addEventListener('click', async () => {
 function renderAll() {
   if (!allResults.length) return;
 
+  // Level 2 USPSA filter: only chart matches with likely-USPSA type
+  // Also exclude matches the user has manually deselected
+  const uspsaBase = allResults.filter(r =>
+    isLikelyUSPSA(r.match_type || 'Unknown') &&
+    !deselectedMatches.has(r.match_id)
+  );
+
   // 'ranked' = confirmed by member number only
   // 'all'    = any match where a score was found (by member# or name)
   const chartable = currentView === 'ranked'
-    ? allResults.filter(r => r.found_by === 'member_number' && r.overall_pct != null)
-    : allResults.filter(r => r.overall_pct != null);
+    ? uspsaBase.filter(r => r.found_by === 'member_number' && r.overall_pct != null)
+    : uspsaBase.filter(r => r.overall_pct != null);
 
   const sorted = [...chartable].sort((a, b) => {
     const da = parseDate(a.date), db = parseDate(b.date);
@@ -320,7 +348,11 @@ function renderMatchList() {
   });
 
   sorted.forEach(match => {
-    const hasStages = !!(match.stages && match.stages.length > 0);
+    const hasStages  = !!(match.stages && match.stages.length > 0);
+    const matchType  = match.match_type || 'Unknown';
+    const isUSPSA    = isLikelyUSPSA(matchType);
+    const isDeselected = deselectedMatches.has(match.match_id);
+    const isExcluded = !isUSPSA || isDeselected;
 
     const dotClass = match.found_by === 'member_number' ? 'scored'
                    : match.found_by === 'name'          ? 'named'
@@ -334,22 +366,32 @@ function renderMatchList() {
     if (match.fetched_at) metaParts.push(formatAge(match.fetched_at));
     if (match.found_by === 'name') metaParts.push('matched by name');
     if (hasStages) metaParts.push(`${match.stages.length} stages`);
+    if (!isUSPSA) metaParts.push('excluded from charts');
+
+    const typeBadgeClass = matchType === 'USPSA' ? 'type-uspsa'
+                         : matchType === 'Unknown' ? 'type-unknown'
+                         : 'type-other';
 
     const item = document.createElement('div');
-    item.className = 'match-item';
+    item.className = 'match-item' + (isExcluded ? ' excluded' : '');
 
     const row = document.createElement('div');
     row.className = 'match-row';
     row.dataset.matchId = match.match_id;
     row.innerHTML = `
+      <input type="checkbox" class="match-include-cb" title="Include in charts"
+        ${isDeselected ? '' : 'checked'}
+        ${!isUSPSA ? 'disabled' : ''}>
       <div class="match-dot ${dotClass}"></div>
       <div class="match-info">
         <div class="match-name">${match.match_name}</div>
         <div class="match-meta">${metaParts.join(' · ')}</div>
       </div>
+      <span class="match-type-badge ${typeBadgeClass}">${matchType}</span>
       <div class="match-score ${scoreText ? '' : 'none'}">${scoreText || 'No score'}</div>
       ${hasStages ? '<button class="expand-btn" title="Show stage breakdown">▼</button>' : ''}
       <button class="refresh-btn" title="Re-fetch this match">↻</button>
+      <button class="delete-btn" title="Delete from history">✕</button>
     `;
 
     if (hasStages) {
@@ -394,7 +436,7 @@ function renderMatchList() {
 
       row.style.cursor = 'pointer';
       row.addEventListener('click', e => {
-        if (e.target.closest('.refresh-btn')) return;
+        if (e.target.closest('.refresh-btn, .delete-btn, .match-include-cb')) return;
         toggleExpand();
       });
       row.querySelector('.expand-btn').addEventListener('click', e => {
@@ -408,13 +450,72 @@ function renderMatchList() {
       item.appendChild(row);
     }
 
+    // Checkbox: toggle match inclusion in charts
+    if (isUSPSA) {
+      row.querySelector('.match-include-cb').addEventListener('change', e => {
+        e.stopPropagation();
+        if (e.target.checked) {
+          deselectedMatches.delete(match.match_id);
+        } else {
+          deselectedMatches.add(match.match_id);
+        }
+        saveDeselected();
+        item.classList.toggle('excluded', !e.target.checked);
+        renderAll();
+      });
+    }
+
+    // Refresh button
     row.querySelector('.refresh-btn').addEventListener('click', e => {
       e.stopPropagation();
       refreshSingleMatch(match, row.querySelector('.refresh-btn'));
     });
 
+    // Delete button
+    row.querySelector('.delete-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      deleteMatch(match);
+    });
+
     matchRowsEl.appendChild(item);
   });
+}
+
+// ── Delete a match from history/cache ────────────────────────────────────────
+async function deleteMatch(match) {
+  const ok = confirm(
+    `Delete "${match.match_name}" from match history?\n\n` +
+    `This removes it from your local cache. It will be re-fetched next time you click Fetch Scores.`
+  );
+  if (!ok) return;
+
+  allResults = allResults.filter(r => r.match_id !== match.match_id);
+  deselectedMatches.delete(match.match_id);
+
+  const d = await chrome.storage.local.get(['matchCache', 'lastMatchList']);
+  const cache     = d.matchCache     || {};
+  const matchList = d.lastMatchList  || [];
+  delete cache[match.match_id];
+  const newList = matchList.filter(m => m.match_id !== match.match_id);
+
+  await chrome.storage.local.set({
+    matchCache:        cache,
+    lastMatchList:     newList,
+    deselectedMatches: [...deselectedMatches],
+  });
+
+  renderAll();
+  renderMatchList();
+
+  if (!allResults.length) {
+    summaryBar.classList.remove('visible');
+    chartsEl.classList.remove('visible');
+    matchHistory.classList.remove('visible');
+    setStatus('No matches. Click Fetch Scores to load.', '');
+  } else {
+    const scored = allResults.filter(r => r.overall_pct != null).length;
+    setStatus(`${allResults.length} match(es) — ${scored} with scores.`, 'success');
+  }
 }
 
 async function refreshSingleMatch(match, btn) {

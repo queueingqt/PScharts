@@ -334,6 +334,61 @@
 
     a { color: #4a9eff; text-decoration: none; }
     a:hover { text-decoration: underline; }
+
+    /* ── No-member-number warning ── */
+    #noMemberWarning {
+      display: none;
+      margin: 0 24px 8px;
+      padding: 10px 14px;
+      background: rgba(255,152,0,0.08);
+      border: 1px solid rgba(255,152,0,0.35);
+      border-radius: 6px;
+      color: #ff9800;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    /* ── Match type badge ── */
+    .match-type-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 3px;
+      font-weight: 600;
+      flex-shrink: 0;
+      letter-spacing: 0.3px;
+    }
+    .type-uspsa   { background: rgba(76,175,80,0.12);  color: #4caf50; border: 1px solid rgba(76,175,80,0.3); }
+    .type-unknown { background: rgba(255,152,0,0.12);  color: #ff9800; border: 1px solid rgba(255,152,0,0.3); }
+    .type-other   { background: rgba(244,67,54,0.12);  color: #f44336; border: 1px solid rgba(244,67,54,0.3); }
+
+    /* ── Include checkbox ── */
+    .match-include-cb {
+      width: 15px; height: 15px;
+      flex-shrink: 0;
+      cursor: pointer;
+      accent-color: #4a9eff;
+    }
+    .match-include-cb:disabled { opacity: 0.3; cursor: default; }
+
+    /* ── Excluded (deselected) match row ── */
+    .match-item.excluded .match-row {
+      opacity: 0.45;
+    }
+    .match-item.excluded .match-name { color: #888; }
+
+    /* ── Delete button ── */
+    .delete-btn {
+      padding: 4px 7px;
+      border-radius: 4px;
+      border: 1px solid #2a2d3a;
+      background: none;
+      color: #555;
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .delete-btn:hover { color: #f44336; border-color: #f44336; }
   </style>
 </head>
 <body>
@@ -344,15 +399,20 @@
 </header>
 
 <div class="controls">
-  <input id="memberInput" type="text" placeholder="USPSA member # (e.g. A12345)" />
-  <input id="nameInput"   type="text" placeholder="Name fallback (e.g. Smith, Jane)" />
+  <input id="memberInput" type="text" placeholder="USPSA member # (e.g. A12345, optional)" />
+  <input id="nameInput"   type="text" placeholder="Name (e.g. Smith, Jane)" />
   <button id="editBtn"   class="ctrl-btn">Edit</button>
   <button id="saveBtn"   class="ctrl-btn">Save</button>
   <button id="cancelBtn" class="ctrl-btn">Cancel</button>
   <button id="fetchBtn"  class="ctrl-btn">Fetch Scores</button>
 </div>
 
-<div id="status">Enter your member number and click Fetch Scores.</div>
+<div id="status">Enter your USPSA member number (recommended) and/or name, then click Fetch Scores.</div>
+
+<div id="noMemberWarning">
+  No USPSA member number entered — scores will be matched by name only and shown under "All Matches" view.
+  For confirmed results, add your member number and click Edit → Save.
+</div>
 
 <div id="noData">
   No score data found.<br>
