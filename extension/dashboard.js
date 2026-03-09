@@ -27,12 +27,20 @@ const matchRowsEl  = document.getElementById('matchRows');
 const tooltipEl    = document.getElementById('tooltip');
 
 // ── Update check ─────────────────────────────────────────────────────────────
+<<<<<<< Updated upstream
 const RELEASES_API      = 'https://api.github.com/repos/lexxrexx/PScharts/releases/latest';
+=======
+const RELEASES_API = 'https://api.github.com/repos/lexxrexx/PScharts/releases/latest';
+>>>>>>> Stashed changes
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // re-check at most every 4 hours
 
 function parseVersion(v) {
   return (v || '').replace(/^v/, '').split('.').map(Number);
 }
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
 function isNewer(latest, current) {
   const a = parseVersion(latest), b = parseVersion(current);
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
@@ -46,14 +54,22 @@ async function checkForUpdate() {
   const { updateCheck } = await chrome.storage.local.get('updateCheck');
   const now = Date.now();
 
+<<<<<<< Updated upstream
   if (updateCheck && (now - updateCheck.checkedAt) < CHECK_INTERVAL_MS) {
     if (updateCheck.latestVersion && updateCheck.downloadUrl) {
       showUpdateBanner(updateCheck.latestVersion, updateCheck.downloadUrl, updateCheck.releaseNotes || '');
+=======
+  // Use cached result if fresh
+  if (updateCheck && (now - updateCheck.checkedAt) < CHECK_INTERVAL_MS) {
+    if (updateCheck.latestVersion && updateCheck.downloadUrl) {
+      showUpdateBanner(updateCheck.latestVersion, updateCheck.downloadUrl);
+>>>>>>> Stashed changes
     }
     return;
   }
 
   try {
+<<<<<<< Updated upstream
     const res = await fetch(RELEASES_API);
     if (!res.ok) return;
     const data = await res.json();
@@ -74,11 +90,36 @@ function showUpdateBanner(latestVersion, downloadUrl, releaseNotes) {
   const textEl      = document.getElementById('updateBannerText');
   const notesEl     = document.getElementById('updateBannerNotes');
   const toggleBtn   = document.getElementById('updateNotesToggle');
+=======
+    const res  = await fetch(RELEASES_API);
+    if (!res.ok) return;
+    const data = await res.json();
+    const latestVersion = (data.tag_name || '').replace(/^v/, '');
+    const downloadUrl   = data.html_url || `https://github.com/lexxrexx/PScharts/releases/latest`;
+
+    await chrome.storage.local.set({
+      updateCheck: { latestVersion, downloadUrl, checkedAt: now },
+    });
+
+    showUpdateBanner(latestVersion, downloadUrl);
+  } catch (_) {
+    // Network error — silently skip
+  }
+}
+
+function showUpdateBanner(latestVersion, downloadUrl) {
+  const currentVersion = chrome.runtime.getManifest().version;
+  if (!isNewer(latestVersion, currentVersion)) return;
+
+  const banner = document.getElementById('updateBanner');
+  const textEl = document.getElementById('updateBannerText');
+>>>>>>> Stashed changes
 
   textEl.innerHTML = `Update available: v${latestVersion} &mdash; `
     + `<a href="${downloadUrl}" target="_blank">Download</a>, then go to `
     + `<a href="chrome://extensions" target="_blank">chrome://extensions</a> and click the reload button.`;
 
+<<<<<<< Updated upstream
   if (releaseNotes) {
     notesEl.textContent = releaseNotes;
     toggleBtn.style.display = 'inline-block';
@@ -93,6 +134,12 @@ function showUpdateBanner(latestVersion, downloadUrl, releaseNotes) {
   banner.classList.add('visible');
 }
 
+=======
+  banner.classList.add('visible');
+}
+
+// Run on dashboard load
+>>>>>>> Stashed changes
 checkForUpdate();
 
 // ── Module state ──────────────────────────────────────────────────────────────
@@ -458,56 +505,67 @@ function renderAll() {
   // All unique dates for shared X axis
   const allDates = [...new Set(viewSorted.map(r => r.date))].sort();
 
-  const scoreSeries = Object.entries(byDiv).map(([div, matches], i) => ({
-    label: div,
-    color: DIV_PALETTE[i % DIV_PALETTE.length],
-    points: matches.map(r => ({
-      date:        r.date,
-      y:           r.div_pct ?? r.overall_pct,
-      label:       r.match_name,
-      division:    r.division,
-      class_:      r.class_,
-      overall_pct: r.overall_pct,
-      div_pct:     r.div_pct,
-      place:       r.div_place ?? r.place,
-      total:       r.div_total ?? r.total,
-      foundBy:     r.found_by,
-      stages:      r.stages || null,
-    })),
-  }));
+  const scoreSeries = Object.entries(byDiv).map(([div, matches], i) => {
+    const byDate = new Map();
+    for (const r of matches) {
+      if (!byDate.has(r.date)) byDate.set(r.date, []);
+      byDate.get(r.date).push(r);
+    }
+    const points = [...byDate.entries()].map(([date, group]) => {
+      const ys = group.map(r => r.div_pct ?? r.overall_pct).filter(v => v != null);
+      const avgY = ys.length ? ys.reduce((s, v) => s + v, 0) / ys.length : null;
+      if (group.length === 1) {
+        const r = group[0];
+        return { date, y: avgY, label: r.match_name, division: r.division, class_: r.class_,
+          overall_pct: r.overall_pct, div_pct: r.div_pct,
+          place: r.div_place ?? r.place, total: r.div_total ?? r.total,
+          foundBy: r.found_by, stages: r.stages || null };
+      }
+      return { date, y: avgY, label: `${group.length} matches`, multiMatch: group.map(r => ({
+        label: r.match_name, y: r.div_pct ?? r.overall_pct, overall_pct: r.overall_pct,
+        division: r.division, class_: r.class_,
+        place: r.div_place ?? r.place, total: r.div_total ?? r.total, foundBy: r.found_by,
+      })), division: group[0].division, class_: group[0].class_, overall_pct: avgY };
+    });
+    return { label: div, color: DIV_PALETTE[i % DIV_PALETTE.length], points };
+  });
 
   drawMultiSeriesChart(document.getElementById('chartTime'), scoreSeries, allDates, {
     yLabel: 'Division %', yMin: 0, yMax: 100, invertY: false, trend: true, valueUnit: '%',
     showClassBands: true,
   });
 
-  const placeSeries = Object.entries(byDiv).map(([div, matches], i) => ({
-    label: div,
-    color: DIV_PALETTE[i % DIV_PALETTE.length],
-    points: matches
-      .filter(r => {
-        const place = r.div_place ?? r.place;
-        const total = r.div_total ?? r.total;
-        return place != null && total != null && total > 0;
-      })
-      .map(r => {
-        const place = r.div_place ?? r.place;
-        const total = r.div_total ?? r.total;
-        // Weighted: % of field beaten — 1st of N → highest, last → 0%
-        const y = Math.round((1 - place / total) * 1000) / 10;
-        return {
-          date:        r.date,
-          y,
-          rawPlace:    place,
-          label:       r.match_name,
-          division:    r.division,
-          class_:      r.class_,
-          overall_pct: r.div_pct ?? r.overall_pct,
-          total,
-          foundBy:     r.found_by,
-        };
-      }),
-  })).filter(s => s.points.length > 0);
+  const placeSeries = Object.entries(byDiv).map(([div, matches], i) => {
+    const placeMatches = matches.filter(r => {
+      const place = r.div_place ?? r.place;
+      const total = r.div_total ?? r.total;
+      return place != null && total != null && total > 0;
+    });
+    const byDate = new Map();
+    for (const r of placeMatches) {
+      if (!byDate.has(r.date)) byDate.set(r.date, []);
+      byDate.get(r.date).push(r);
+    }
+    const points = [...byDate.entries()].map(([date, group]) => {
+      const ys = group.map(r => {
+        const place = r.div_place ?? r.place, total = r.div_total ?? r.total;
+        return Math.round((1 - place / total) * 1000) / 10;
+      });
+      const avgY = ys.reduce((s, v) => s + v, 0) / ys.length;
+      if (group.length === 1) {
+        const r = group[0];
+        return { date, y: avgY, rawPlace: r.div_place ?? r.place, label: r.match_name,
+          division: r.division, class_: r.class_,
+          overall_pct: r.div_pct ?? r.overall_pct, total: r.div_total ?? r.total, foundBy: r.found_by };
+      }
+      return { date, y: avgY, label: `${group.length} matches`, multiMatch: group.map((r, gi) => ({
+        label: r.match_name, y: ys[gi], rawPlace: r.div_place ?? r.place,
+        total: r.div_total ?? r.total, overall_pct: r.div_pct ?? r.overall_pct,
+        division: r.division, class_: r.class_, foundBy: r.found_by,
+      })), division: group[0].division, class_: group[0].class_ };
+    });
+    return { label: div, color: DIV_PALETTE[i % DIV_PALETTE.length], points };
+  }).filter(s => s.points.length > 0);
 
   if (placeSeries.length > 0) {
     const allPlaceDates = [...new Set(placeSeries.flatMap(s => s.points.map(p => p.date)))].sort();
@@ -544,7 +602,7 @@ function renderMatchList() {
                    : 'none';
 
     const scoreText = match.overall_pct != null
-      ? `${match.overall_pct.toFixed(1)}%${match.division ? ' · ' + match.division : ''}${match.class_ ? '/' + match.class_ : ''}`
+      ? fmtPct(match.overall_pct) + (match.division ? ' · ' + match.division : '') + (match.class_ ? '/' + match.class_ : '')
       : null;
 
     const metaParts = [match.date];
@@ -601,7 +659,7 @@ function renderMatchList() {
               <td>${s.name}</td>
               <td>${s.time != null ? s.time.toFixed(2) + 's' : '—'}</td>
               <td>${s.hf   != null ? s.hf.toFixed(4)         : '—'}</td>
-              <td>${s.pct  != null ? s.pct.toFixed(1) + '%'  : '—'}</td>
+              <td>${fmtPct(s.pct)}</td>
               <td class="col-a">${s.a}</td>
               <td class="col-c">${s.c}</td>
               <td class="col-d">${s.d}</td>
@@ -773,6 +831,18 @@ const CLASS_BANDS = [
   { label: 'D',  min: 0,   max: 40,  fill: 'rgba(120,120,120,0.07)', text: 'rgba(120,120,120,0.55)' },
 ];
 
+function bandForPct(pct) {
+  return CLASS_BANDS.find(b => pct >= b.min && pct < b.max) || null;
+}
+
+function fmtPct(pct) {
+  if (pct == null) return '—';
+  const b = bandForPct(pct);
+  const color = b ? b.text.replace('0.55', '1') : '#8a9bb0';
+  const label = b ? ` <small style="font-size:9px;opacity:0.75">${b.label}</small>` : '';
+  return `<span style="color:${color}">${pct.toFixed(1)}%${label}</span>`;
+}
+
 function chartArea(canvas) {
   return {
     x0: PAD.left,
@@ -942,40 +1012,62 @@ function drawMultiSeriesChart(canvas, seriesArr, allDates, opts = {}) {
       const h  = (canvas._hitMap || []).find(h => Math.hypot(h.cx - mx, h.cy - my) < 16);
       if (h) {
         const unit = h.valueUnit;
-        const classBand = unit === '%'
-          ? CLASS_BANDS.find(b => h.y >= b.min && h.y < b.max) : null;
-        const classLabel = classBand
-          ? `<span style="color:${classBand.text};font-size:10px;margin-left:6px">${classBand.label}</span>` : '';
-        const mainVal = unit === '%'
-          ? `<div class="tt-score" style="color:${h.color}">${h.y.toFixed(1)}%${classLabel} <span style="font-size:11px;color:#666">(div)</span></div>`
-          : unit === 'place%'
-          ? `<div class="tt-score" style="color:${h.color}">Place ${h.rawPlace} / ${h.total} <span style="font-size:11px;color:#666">(beat ${h.y.toFixed(1)}% of field)</span></div>`
-          : `<div class="tt-score" style="color:${h.color}">Place ${h.y}${h.total ? ' / ' + h.total : ''}</div>`;
-        const divLine = (h.division || h.class_)
-          ? `<div class="tt-meta">${[h.division, h.class_].filter(Boolean).join(' / ')}</div>` : '';
-        const overallLine = (unit === '%' && h.overall_pct != null && Math.abs(h.overall_pct - h.y) > 0.1)
-          ? `<div class="tt-meta">${h.overall_pct.toFixed(1)}% overall</div>` : '';
-        const pctLine = (unit === '' && h.overall_pct != null)
-          ? `<div class="tt-meta">${h.overall_pct.toFixed(1)}% score</div>` : '';
-        const nameLine = h.foundBy === 'name'
-          ? `<div class="tt-meta" style="color:#ff9800">matched by name</div>` : '';
-        const seriesLine = (canvas._hitMap || []).some(x => x.seriesLabel !== h.seriesLabel)
-          ? `<div class="tt-meta" style="color:${h.color}">${h.seriesLabel}</div>` : '';
+        const multiMatchRows = h.multiMatch ? h.multiMatch.map(m => {
+          if (unit === '%') {
+            const b = bandForPct(m.y);
+            const c = b ? b.text.replace('0.55', '1') : '#8a9bb0';
+            return `<div class="tt-stage-row"><span class="tt-stage-name">${m.label}</span>`
+              + `<span style="color:${c}">${m.y != null ? m.y.toFixed(1) + '%' + (b ? ' ' + b.label : '') : '—'}</span></div>`;
+          }
+          return `<div class="tt-stage-row"><span class="tt-stage-name">${m.label}</span>`
+            + `<span style="color:#8a9bb0">${m.rawPlace}/${m.total} (beat ${m.y.toFixed(1)}%)</span></div>`;
+        }).join('') : '';
 
-        const stagesHtml = (h.stages && h.stages.length > 0)
-          ? `<div class="tt-stages">${h.stages.map(s => `
-              <div class="tt-stage-row">
-                <span class="tt-stage-name">${s.name}</span>
-                <span class="tt-stage-hf">${s.hf != null ? s.hf.toFixed(4) : '—'}</span>
-                <span class="tt-stage-hits">${s.a}A ${s.c}C ${s.d}D${s.m ? ' <span style="color:#f44336">' + s.m + 'M</span>' : ''}${s.ns ? ' ' + s.ns + 'NS' : ''}${s.p ? ' ' + s.p + 'P' : ''}</span>
-              </div>`).join('')}</div>` : '';
-
-        tooltipEl.innerHTML = `
-          <div class="tt-name">${h.label}</div>
-          <div class="tt-date">${h.date || ''}</div>
-          ${mainVal}${divLine}${overallLine}${pctLine}${seriesLine}${nameLine}${stagesHtml}
-        `;
-        const tw = 300, th = h.stages?.length ? 280 : 130;
+        if (h.multiMatch) {
+          const classBand = unit === '%' ? bandForPct(h.y) : null;
+          const classLabel = classBand ? ` <span style="color:${classBand.text};font-size:10px">${classBand.label}</span>` : '';
+          const avgLine = unit === '%'
+            ? `<div class="tt-score" style="color:${h.color}">${h.y.toFixed(1)}%${classLabel} <span style="font-size:11px;color:#666">avg (div)</span></div>`
+            : `<div class="tt-score" style="color:${h.color}">${h.y.toFixed(1)}% <span style="font-size:11px;color:#666">avg beaten</span></div>`;
+          tooltipEl.innerHTML = `
+            <div class="tt-name">${h.label}</div>
+            <div class="tt-date">${h.date || ''}</div>
+            ${avgLine}
+            <div class="tt-stages">${multiMatchRows}</div>
+          `;
+        } else {
+          const classBand = unit === '%' ? bandForPct(h.y) : null;
+          const classLabel = classBand
+            ? `<span style="color:${classBand.text};font-size:10px;margin-left:6px">${classBand.label}</span>` : '';
+          const mainVal = unit === '%'
+            ? `<div class="tt-score" style="color:${h.color}">${h.y.toFixed(1)}%${classLabel} <span style="font-size:11px;color:#666">(div)</span></div>`
+            : unit === 'place%'
+            ? `<div class="tt-score" style="color:${h.color}">Place ${h.rawPlace} / ${h.total} <span style="font-size:11px;color:#666">(beat ${h.y.toFixed(1)}% of field)</span></div>`
+            : `<div class="tt-score" style="color:${h.color}">Place ${h.y}${h.total ? ' / ' + h.total : ''}</div>`;
+          const divLine = (h.division || h.class_)
+            ? `<div class="tt-meta">${[h.division, h.class_].filter(Boolean).join(' / ')}</div>` : '';
+          const overallLine = (unit === '%' && h.overall_pct != null && Math.abs(h.overall_pct - h.y) > 0.1)
+            ? `<div class="tt-meta">${h.overall_pct.toFixed(1)}% overall</div>` : '';
+          const pctLine = (unit === '' && h.overall_pct != null)
+            ? `<div class="tt-meta">${h.overall_pct.toFixed(1)}% score</div>` : '';
+          const nameLine = h.foundBy === 'name'
+            ? `<div class="tt-meta" style="color:#ff9800">matched by name</div>` : '';
+          const seriesLine = (canvas._hitMap || []).some(x => x.seriesLabel !== h.seriesLabel)
+            ? `<div class="tt-meta" style="color:${h.color}">${h.seriesLabel}</div>` : '';
+          const stagesHtml = (h.stages && h.stages.length > 0)
+            ? `<div class="tt-stages">${h.stages.map(s => `
+                <div class="tt-stage-row">
+                  <span class="tt-stage-name">${s.name}</span>
+                  <span class="tt-stage-hf">${s.hf != null ? s.hf.toFixed(4) : '—'}</span>
+                  <span class="tt-stage-hits"><span style="color:#4caf50">${s.a}A</span> <span style="color:#fdd835">${s.c}C</span> <span style="color:#ff9800">${s.d}D</span>${s.m ? ' <span style="color:#f44336;font-weight:600">' + s.m + 'M</span>' : ''}${s.ns ? ' <span style="color:#f44336;font-weight:600">' + s.ns + 'NS</span>' : ''}${s.p ? ' <span style="color:#f44336">' + s.p + 'P</span>' : ''}</span>
+                </div>`).join('')}</div>` : '';
+          tooltipEl.innerHTML = `
+            <div class="tt-name">${h.label}</div>
+            <div class="tt-date">${h.date || ''}</div>
+            ${mainVal}${divLine}${overallLine}${pctLine}${seriesLine}${nameLine}${stagesHtml}
+          `;
+        }
+        const tw = 300, th = (h.multiMatch || h.stages?.length) ? 280 : 130;
         const tx = e.clientX + 14 + tw > window.innerWidth  ? e.clientX - tw - 8 : e.clientX + 14;
         const ty = e.clientY - 10 + th > window.innerHeight ? e.clientY - th      : e.clientY - 10;
         tooltipEl.style.left    = tx + 'px';
