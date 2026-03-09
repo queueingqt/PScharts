@@ -15,7 +15,7 @@ A Chrome extension that pulls your USPSA match results from PractiScore and disp
 - **Filter matches** — checkboxes let you include or exclude individual matches from your charts without deleting them
 - **Delete matches** — permanently remove a match from history and cache via the delete button on each row
 - **Local caching** — match data is cached in browser storage; individual matches can be refreshed on demand
-- **No external server** — everything runs locally in your browser using your existing PractiScore login session.
+- **No external server** — everything runs locally in your browser using your existing PractiScore login session
 
 ---
 
