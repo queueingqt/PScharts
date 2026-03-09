@@ -61,7 +61,7 @@ function detectMatchType(name) {
 }
 
 // Types confirmed as non-USPSA — skip score fetching for these
-const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE']);
+const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE', 'SCSA']);
 
 function isLikelyUSPSA(matchType) {
   return !NON_USPSA_TYPES.has(matchType);
@@ -151,6 +151,23 @@ function getResultsNewState(mem, nm) {
 
   const divisionOptions    = readSelect('divisionLevel');
   const resultLevelOptions = readSelect('resultLevel');
+
+  // Extract confirmed sport type from page header:
+  // <h4>Match Title <small>USPSA 2026-02-28</small></h4>
+  let pageMatchType = null;
+  const SPORT_TOKENS = ['USPSA', 'IDPA', 'IPSC', 'SCSA', 'PCSL', 'ICORE'];
+  for (const h4 of document.querySelectorAll('h4')) {
+    for (const small of h4.querySelectorAll('small')) {
+      const txt   = small.textContent.trim();
+      const words = txt.split(/\s+/);
+      const first = words[0].toUpperCase();
+      const firstTwo = words.slice(0, 2).join(' ').toUpperCase();
+      if (firstTwo === 'HIT FACTOR')     { pageMatchType = 'Hit Factor'; break; }
+      if (SPORT_TOKENS.includes(first))  { pageMatchType = first; break; }
+      if (/^3[-\s]?GUN$/i.test(first))   { pageMatchType = '3-Gun'; break; }
+    }
+    if (pageMatchType) break;
+  }
 
   // Largest table = results table
   const table = tables.sort(
@@ -247,6 +264,7 @@ function getResultsNewState(mem, nm) {
       resultLevelOptions,
       competitorData: parseRow(row),
       _rowCount: total,
+      pageMatchType,
     };
   }
 
@@ -254,6 +272,7 @@ function getResultsNewState(mem, nm) {
     _ready: true, _found: false,
     divisionOptions, resultLevelOptions,
     _rowCount: total, _headers: ths,
+    pageMatchType,
   };
 }
 
@@ -504,6 +523,10 @@ async function fetchScores(memberNumber, name) {
       }
 
       const score  = await fetchMatchScore(tabId, match.match_id, memberNumber, name, push);
+
+      // Override match type with the confirmed value read from the results page
+      if (score._pageMatchType) match.match_type = score._pageMatchType;
+
       const stages = score.overall_pct != null
         ? await fetchStageData(tabId, match.match_id, memberNumber, name, score._divKey, score._stageOptions, push)
         : null;
@@ -516,6 +539,9 @@ async function fetchScores(memberNumber, name) {
 
       push(`     score: ${score.overall_pct != null ? score.overall_pct + '%' : 'not found'} [${score.found_by || 'none'}]`);
     }
+
+    // Re-save lastMatchList with any match_type values confirmed from the results pages
+    await chrome.storage.local.set({ lastMatchList: matchList });
 
     const n = results.filter(r => r.overall_pct != null).length;
     push(`Done — ${n}/${uspsaMatches.length} matches with scores.`);
@@ -579,9 +605,14 @@ async function fetchMatchScore(tabId, matchId, memberNumber, name, push) {
     push(`     results/new did not load: ${state?._debug || 'unknown'}`);
     return {};
   }
+
+  // Capture confirmed match type from the page (available regardless of whether competitor was found)
+  const _pageMatchType = state.pageMatchType || null;
+  if (_pageMatchType) push(`     page type: ${_pageMatchType}`);
+
   if (!state._found) {
     push(`     not found in combined view (${state._rowCount} rows, headers: [${state._headers?.join(', ')}])`);
-    return {};
+    return { _pageMatchType };
   }
 
   const division = state.competitorData.division;
@@ -644,10 +675,10 @@ async function fetchMatchScore(tabId, matchId, memberNumber, name, push) {
     class_:      d.class_,
     hf:          d.hf,
     found_by:    state.found_by,
+    _pageMatchType,
     _divOpt:     divOpt,
     _stageOptions: stageOptions,
     _divKey:     divKey,
-    // keep _stageLinks compatible with old fetchStageData signature
     _stageLinks: stageOptions.map((o, i) => ({ num: i, href: o.value, text: o.text })),
   };
 }

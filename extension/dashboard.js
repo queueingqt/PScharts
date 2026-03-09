@@ -31,7 +31,7 @@ let allResults       = [];
 let currentView      = 'ranked'; // 'ranked' | 'all'
 let deselectedMatches = new Set(); // match IDs manually excluded from charts
 
-const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE']);
+const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE', 'SCSA']);
 function isLikelyUSPSA(matchType) { return !NON_USPSA_TYPES.has(matchType); }
 
 function saveDeselected() {
@@ -123,6 +123,7 @@ chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache',
     }));
     if (restored.length > 0) {
       allResults = restored;
+      if (!d.memberNumber) switchView('all');
       renderAll();
       renderMatchList();
       const scored = restored.filter(r => r.overall_pct != null).length;
@@ -133,11 +134,14 @@ chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache',
 });
 
 // ── View toggle ───────────────────────────────────────────────────────────────
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+}
+
 document.querySelectorAll('.view-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentView = btn.dataset.view;
+    switchView(btn.dataset.view);
     renderAll();
   });
 });
@@ -200,6 +204,10 @@ fetchBtn.addEventListener('click', async () => {
     }
 
     allResults = results;
+
+    // No member number → name-only results won't appear in "Scored Only" view; switch automatically
+    if (!memberNumber) switchView('all');
+
     renderAll();
     renderMatchList();
 
@@ -229,11 +237,11 @@ function renderAll() {
     !deselectedMatches.has(r.match_id)
   );
 
-  // 'ranked' = confirmed by member number only
-  // 'all'    = any match where a score was found (by member# or name)
+  // 'ranked' = confirmed by member number, % score required
+  // 'all'    = any scored match (% or HF), including HF-only results
   const chartable = currentView === 'ranked'
     ? uspsaBase.filter(r => r.found_by === 'member_number' && r.overall_pct != null)
-    : uspsaBase.filter(r => r.overall_pct != null);
+    : uspsaBase.filter(r => r.overall_pct != null || r.hf != null);
 
   const sorted = [...chartable].sort((a, b) => {
     const da = parseDate(a.date), db = parseDate(b.date);
@@ -242,34 +250,40 @@ function renderAll() {
 
   const placeData = sorted.filter(r => r.place != null);
 
-  if (sorted.length > 0) {
-    const avg  = sorted.reduce((s, r) => s + r.overall_pct, 0) / sorted.length;
-    const best = Math.max(...sorted.map(r => r.overall_pct));
-    const divs = [...new Set(sorted.map(r => r.division).filter(Boolean))];
+  summaryBar.classList.add('visible');
+  chartsEl.classList.add('visible');
+  sizeCanvases();
 
-    const avgBand  = CLASS_BANDS.find(b => avg  >= b.min && avg  < b.max);
-    const bestBand = CLASS_BANDS.find(b => best >= b.min && best < b.max);
-
-    document.getElementById('statMatches').textContent = sorted.length;
-    document.getElementById('statAvg').textContent     = avg.toFixed(1) + '%';
-    document.getElementById('statAvg').style.color     = avgBand?.text.replace('0.55','1') || '#4a9eff';
-    document.getElementById('statBest').textContent    = best.toFixed(1) + '%';
-    document.getElementById('statBest').style.color    = bestBand?.text.replace('0.55','1') || '#4a9eff';
-    document.getElementById('statDiv').textContent     = divs[0] || '—';
-
-    // Show current class in the Avg stat label
-    const avgLbl = document.querySelector('#statMatches')?.closest('#stats')
-      ?.querySelectorAll('.stat-box')[1]?.querySelector('.lbl');
-    if (avgLbl) avgLbl.textContent = avgBand ? `Avg % · ${avgBand.label} Class` : 'Avg %';
-    summaryBar.classList.add('visible');
-    chartsEl.classList.add('visible');
-  } else {
-    summaryBar.classList.remove('visible');
-    chartsEl.classList.remove('visible');
+  if (sorted.length === 0) {
+    const msg = currentView === 'ranked'
+      ? 'No member-number confirmed scores.\nSwitch to "All Matches" to see name-matched results.'
+      : 'No data.';
+    drawMessage(document.getElementById('chartTime'),  msg);
+    drawMessage(document.getElementById('chartPlace'), msg);
+    document.getElementById('statMatches').textContent = '—';
+    document.getElementById('statAvg').textContent     = '—';
+    document.getElementById('statBest').textContent    = '—';
+    document.getElementById('statDiv').textContent     = '—';
     return;
   }
 
-  sizeCanvases();
+  const avg  = sorted.reduce((s, r) => s + (r.overall_pct ?? 0), 0) / sorted.length;
+  const best = Math.max(...sorted.map(r => r.overall_pct ?? 0));
+  const divs = [...new Set(sorted.map(r => r.division).filter(Boolean))];
+
+  const avgBand  = CLASS_BANDS.find(b => avg  >= b.min && avg  < b.max);
+  const bestBand = CLASS_BANDS.find(b => best >= b.min && best < b.max);
+
+  document.getElementById('statMatches').textContent = sorted.length;
+  document.getElementById('statAvg').textContent     = avg.toFixed(1) + '%';
+  document.getElementById('statAvg').style.color     = avgBand?.text.replace('0.55','1') || '#4a9eff';
+  document.getElementById('statBest').textContent    = best.toFixed(1) + '%';
+  document.getElementById('statBest').style.color    = bestBand?.text.replace('0.55','1') || '#4a9eff';
+  document.getElementById('statDiv').textContent     = divs[0] || '—';
+
+  const avgLbl = document.querySelector('#statMatches')?.closest('#stats')
+    ?.querySelectorAll('.stat-box')[1]?.querySelector('.lbl');
+  if (avgLbl) avgLbl.textContent = avgBand ? `Avg % · ${avgBand.label} Class` : 'Avg %';
 
   const DIV_PALETTE = ['#4a9eff','#4caf50','#ff9800','#e91e63','#9c27b0','#00bcd4','#ffeb3b'];
 
@@ -311,23 +325,34 @@ function renderAll() {
     label: div,
     color: DIV_PALETTE[i % DIV_PALETTE.length],
     points: matches
-      .filter(r => (r.div_place ?? r.place) != null)
-      .map(r => ({
-        date:       r.date,
-        y:          r.div_place ?? r.place,
-        label:      r.match_name,
-        division:   r.division,
-        class_:     r.class_,
-        overall_pct: r.div_pct ?? r.overall_pct,
-        total:      r.div_total ?? r.total,
-        foundBy:    r.found_by,
-      })),
+      .filter(r => {
+        const place = r.div_place ?? r.place;
+        const total = r.div_total ?? r.total;
+        return place != null && total != null && total > 0;
+      })
+      .map(r => {
+        const place = r.div_place ?? r.place;
+        const total = r.div_total ?? r.total;
+        // Weighted: % of field beaten — 1st of N → highest, last → 0%
+        const y = Math.round((1 - place / total) * 1000) / 10;
+        return {
+          date:        r.date,
+          y,
+          rawPlace:    place,
+          label:       r.match_name,
+          division:    r.division,
+          class_:      r.class_,
+          overall_pct: r.div_pct ?? r.overall_pct,
+          total,
+          foundBy:     r.found_by,
+        };
+      }),
   })).filter(s => s.points.length > 0);
 
   if (placeSeries.length > 0) {
     const allPlaceDates = [...new Set(placeSeries.flatMap(s => s.points.map(p => p.date)))].sort();
     drawMultiSeriesChart(document.getElementById('chartPlace'), placeSeries, allPlaceDates, {
-      yLabel: 'Division Place', invertY: true, valueUnit: '',
+      yLabel: 'Field beaten %', yMin: 0, yMax: 100, invertY: false, valueUnit: 'place%',
     });
   } else {
     drawMessage(document.getElementById('chartPlace'), 'No placement data.');
@@ -368,9 +393,9 @@ function renderMatchList() {
     if (hasStages) metaParts.push(`${match.stages.length} stages`);
     if (!isUSPSA) metaParts.push('excluded from charts');
 
-    const typeBadgeClass = matchType === 'USPSA' ? 'type-uspsa'
-                         : matchType === 'Unknown' ? 'type-unknown'
-                         : 'type-other';
+    const typeBadgeClass = !isLikelyUSPSA(matchType)              ? 'type-other'    // red  — non-USPSA sport
+                         : match.found_by === 'member_number'    ? 'type-uspsa'    // green — confirmed by member #
+                         : 'type-unknown';                                          // orange — name-only or not found
 
     const item = document.createElement('div');
     item.className = 'match-item' + (isExcluded ? ' excluded' : '');
@@ -763,6 +788,8 @@ function drawMultiSeriesChart(canvas, seriesArr, allDates, opts = {}) {
           ? `<span style="color:${classBand.text};font-size:10px;margin-left:6px">${classBand.label}</span>` : '';
         const mainVal = unit === '%'
           ? `<div class="tt-score" style="color:${h.color}">${h.y.toFixed(1)}%${classLabel} <span style="font-size:11px;color:#666">(div)</span></div>`
+          : unit === 'place%'
+          ? `<div class="tt-score" style="color:${h.color}">Place ${h.rawPlace} / ${h.total} <span style="font-size:11px;color:#666">(beat ${h.y.toFixed(1)}% of field)</span></div>`
           : `<div class="tt-score" style="color:${h.color}">Place ${h.y}${h.total ? ' / ' + h.total : ''}</div>`;
         const divLine = (h.division || h.class_)
           ? `<div class="tt-meta">${[h.division, h.class_].filter(Boolean).join(' / ')}</div>` : '';
