@@ -26,6 +26,75 @@ const matchHistory = document.getElementById('matchHistory');
 const matchRowsEl  = document.getElementById('matchRows');
 const tooltipEl    = document.getElementById('tooltip');
 
+// ── Update check ─────────────────────────────────────────────────────────────
+const RELEASES_API      = 'https://api.github.com/repos/lexxrexx/PScharts/releases/latest';
+const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // re-check at most every 4 hours
+
+function parseVersion(v) {
+  return (v || '').replace(/^v/, '').split('.').map(Number);
+}
+function isNewer(latest, current) {
+  const a = parseVersion(latest), b = parseVersion(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] || 0) - (b[i] || 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+}
+
+async function checkForUpdate() {
+  const { updateCheck } = await chrome.storage.local.get('updateCheck');
+  const now = Date.now();
+
+  if (updateCheck && (now - updateCheck.checkedAt) < CHECK_INTERVAL_MS) {
+    if (updateCheck.latestVersion && updateCheck.downloadUrl) {
+      showUpdateBanner(updateCheck.latestVersion, updateCheck.downloadUrl, updateCheck.releaseNotes || '');
+    }
+    return;
+  }
+
+  try {
+    const res = await fetch(RELEASES_API);
+    if (!res.ok) return;
+    const data = await res.json();
+    const latestVersion = (data.tag_name || '').replace(/^v/, '');
+    const downloadUrl   = data.html_url || 'https://github.com/lexxrexx/PScharts/releases/latest';
+    const releaseNotes  = (data.body || '').trim();
+
+    await chrome.storage.local.set({ updateCheck: { latestVersion, downloadUrl, releaseNotes, checkedAt: now } });
+    showUpdateBanner(latestVersion, downloadUrl, releaseNotes);
+  } catch (_) {}
+}
+
+function showUpdateBanner(latestVersion, downloadUrl, releaseNotes) {
+  const currentVersion = chrome.runtime.getManifest().version;
+  if (!isNewer(latestVersion, currentVersion)) return;
+
+  const banner      = document.getElementById('updateBanner');
+  const textEl      = document.getElementById('updateBannerText');
+  const notesEl     = document.getElementById('updateBannerNotes');
+  const toggleBtn   = document.getElementById('updateNotesToggle');
+
+  textEl.innerHTML = `Update available: v${latestVersion} &mdash; `
+    + `<a href="${downloadUrl}" target="_blank">Download</a>, then go to `
+    + `<a href="chrome://extensions" target="_blank">chrome://extensions</a> and click the reload button.`;
+
+  if (releaseNotes) {
+    notesEl.textContent = releaseNotes;
+    toggleBtn.style.display = 'inline-block';
+    toggleBtn.addEventListener('click', () => {
+      const open = notesEl.classList.toggle('open');
+      toggleBtn.textContent = open ? 'Release notes ▴' : 'Release notes ▾';
+    });
+  } else {
+    toggleBtn.style.display = 'none';
+  }
+
+  banner.classList.add('visible');
+}
+
+checkForUpdate();
+
 // ── Module state ──────────────────────────────────────────────────────────────
 let allResults       = [];
 let currentView      = 'ranked'; // 'ranked' | 'all'
