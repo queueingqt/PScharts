@@ -106,6 +106,156 @@ let selectedYear     = null;     // year filter for charts (null = All Time)
 const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE', 'SCSA']);
 function isLikelyUSPSA(matchType) { return !NON_USPSA_TYPES.has(matchType); }
 
+function isChartable(r) {
+  return isLikelyUSPSA(r.match_type || 'Unknown');
+}
+
+// ── USPSA Classifier lookup ───────────────────────────────────────────────────
+// Maps classifier number (e.g. "99-11") → official name.
+// isClassifierStage() checks this table first, then falls back to regex for
+// any number matching the XX-YY pattern (covers new/unlisted classifiers).
+const USPSA_CLASSIFIERS = new Map([
+  // 99-series
+  ['99-01', 'Back to Basics Standards'],
+  ['99-02', 'Night Moves'],
+  ['99-03', 'Celeritas and Diligentia'],
+  ['99-04', 'American Standard'],
+  ['99-05', 'Mob Job'],
+  ['99-06', 'Toe The Line'],
+  ['99-07', 'Both Sides Now #1'],
+  ['99-08', 'Melody Line'],
+  ['99-09', 'Long Range Standards'],
+  ['99-10', 'Times Two'],
+  ['99-11', 'El Presidente'],
+  ['99-12', 'Take Your Choice'],
+  ['99-13', 'Quicky II'],
+  ['99-14', 'Hoser Heaven'],
+  ['99-15', 'Diligentia and Celeritas'],
+  ['99-16', 'Both Sides Now #2'],
+  ['99-17', "It's All in the Upper Zone"],
+  ['99-18', 'You Snooze, You Lose'],
+  ['99-19', "Payne's Pain"],
+  ['99-20', 'Fish House Encounter'],
+  ['99-21', 'Mini Mart'],
+  ['99-22', 'Nueve El Presidente'],
+  ['99-23', 'Front Sight'],
+  ['99-24', 'Front Sight 2'],
+  ['99-27', "Lefty's Revenge"],
+  ['99-28', 'Hillbillton Drill'],
+  ['99-29', 'Near to Far Standards'],
+  ['99-30', 'Man Down'],
+  // 03-series
+  ['03-02', 'Six Chickens'],
+  ['03-03', 'Take Em Down'],
+  ['03-04', '3-V'],
+  ['03-05', 'Paper Poppers'],
+  ['03-07', 'Riverdale Standards'],
+  ['03-08', 'Madness'],
+  ['03-09', 'On the Move'],
+  ['03-10', 'Area 5 Standards'],
+  ['03-11', 'El Strong & Weak Pres'],
+  ['03-12', 'Ironsides'],
+  ['03-14', 'Baseball Standards'],
+  ['03-18', 'High Standards'],
+  // 06-series
+  ['06-01', 'Big Barricade'],
+  // 08-series
+  ['08-01', '4 Bill Drill'],
+  // 09-series
+  ['09-01', 'Six in Six Challenge'],
+  ['09-02', 'Diamond Cutter'],
+  ['09-03', 'Oh No'],
+  ['09-04', 'Pucker Factor'],
+  ['09-05', 'Quad Standards'],
+  ['09-06', 'Quad Standards 2'],
+  ['09-07', "It's Not Brain Surgery"],
+  ['09-08', 'Crackerjack'],
+  ['09-09', 'Lightning and Thunder'],
+  ['09-10', "Life's Little Problems"],
+  // 13-series
+  ['13-01', 'Disaster Factor'],
+  ['13-02', 'Down the Middle'],
+  ['13-03', 'Short Sprint Standards'],
+  ['13-04', 'The Roscoe Rattle'],
+  ['13-05', 'Tick Tock'],
+  ['13-06', 'Too Close for Comfort'],
+  ['13-07', 'Double Deal 2'],
+  ['13-08', 'More Disaster Factor'],
+  ['13-09', 'Window Pain'],
+  // 18-series
+  ['18-01', 'Of Course It Did'],
+  ['18-02', 'What Is With You People'],
+  ['18-03', 'We Play Games'],
+  ['18-04', "Didn't You Send the Mailman"],
+  ['18-05', 'No Need to Believe in Either Side'],
+  ['18-06', 'For That Day'],
+  ['18-07', 'Someone Is Always Willing to Pay'],
+  ['18-08', 'The Condor'],
+  ['18-09', 'I Miss That Kind of Clarity'],
+  // 19-series
+  ['19-01', 'HI-Jinx'],
+  ['19-02', 'HI-Way Robbery'],
+  ['19-03', "HI'er Love"],
+  ['19-04', 'HI Cost of Living'],
+  // 20-series
+  ['20-01', 'Wish You Were Here'],
+  ['20-02', 'Deja Vu'],
+  ['20-03', 'Deja Vu All Over Again'],
+  // 21-series
+  ['21-01', '8 x 3 Trigger Freeze'],
+  // 22-series
+  ['22-01', 'Righty Tighty'],
+  ['22-02', 'Lefty Loosey'],
+  // 23-series
+  ['23-01', 'THS Short Course'],
+  ['23-02', 'This Could Be the Greatest Night of Our Lives'],
+  // 24-series
+  ['24-01', 'Can You Strong and Weak Hand?'],
+  ['24-02', 'This Is More Better Now'],
+  ['24-03', 'One Box at a Time'],
+  ['24-04', 'The Thrill of the Bill Drill'],
+  ['24-05', 'Little Bit of Everything'],
+  ['24-06', "Surely You Can't Be Serious"],
+  ['24-07', 'The Near to Far Drill'],
+  ['24-08', 'And Now for Something Completely Different'],
+  // 25-series
+  ['25-01', 'Return to Monke'],
+  ['25-02', 'Look at Me I Am the Captain Now'],
+  ['25-03', 'Let Him Cook'],
+  ['25-04', 'We Did Our Homework'],
+  ['25-05', "It's All Part of the Plan"],
+  ['25-06', 'They All Count'],
+  ['25-07', 'Absolute Cinema'],
+  ['25-08', 'We Lost Hero or Zero'],
+  ['25-09', 'Descent Into Madness'],
+]);
+
+// Returns { number, name } if the stage is a known classifier, or null if not.
+// Checks stored match_def fields first (authoritative), then falls back to name pattern matching.
+function isClassifierStage(stage) {
+  // Accept either a stage object or a bare name string (backwards compat)
+  const stageName = typeof stage === 'string' ? stage : (stage?.name ?? '');
+
+  // 1. Authoritative: match_def.json told us explicitly
+  if (typeof stage === 'object' && stage !== null) {
+    if (stage.is_classifier === true || stage.classifier_code) {
+      const code = stage.classifier_code || null;
+      const name = code ? (USPSA_CLASSIFIERS.get(code) ?? null) : null;
+      return { number: code, name };
+    }
+    if (stage.is_classifier === false) return null;  // explicitly not a classifier
+  }
+
+  // 2. Fallback: extract XX-YY pattern from stage name
+  const m = stageName.match(/\b(\d{2}-\d{2})\b/);
+  if (!m) return null;
+  const num  = m[1];
+  const name = USPSA_CLASSIFIERS.get(num) ?? null;
+  if (name != null) return { number: num, name };
+  if (/\bCM\b/i.test(stageName)) return { number: num, name: null };
+  return null;
+}
+
 function saveDeselected() {
   chrome.storage.local.set({ deselectedMatches: [...deselectedMatches] });
 }
@@ -339,10 +489,10 @@ function renderYearFilter(years) {
 function renderAll() {
   if (!allResults.length) return;
 
-  // Level 2 USPSA filter: only chart matches with likely-USPSA type
+  // Level 2 filter: only chart USPSA/Hit Factor matches (excludes time-scored sports)
   // Also exclude matches the user has manually deselected
   const uspsaBase = allResults.filter(r =>
-    isLikelyUSPSA(r.match_type || 'Unknown') &&
+    isChartable(r) &&
     !deselectedMatches.has(r.match_id)
   );
 
@@ -547,7 +697,7 @@ function renderMatchList() {
   sorted.forEach(match => {
     const hasStages  = !!(match.stages && match.stages.length > 0);
     const matchType  = match.match_type || 'Unknown';
-    const isUSPSA    = isLikelyUSPSA(matchType);
+    const isUSPSA    = isChartable(match);
     const isDeselected = deselectedMatches.has(match.match_id);
     const isExcluded = !isUSPSA || isDeselected;
 
@@ -565,7 +715,7 @@ function renderMatchList() {
     if (hasStages) metaParts.push(`${match.stages.length} stages`);
     if (!isUSPSA) metaParts.push('excluded from charts');
 
-    const typeBadgeClass = !isLikelyUSPSA(matchType)              ? 'type-other'    // red  — non-USPSA sport
+    const typeBadgeClass = !isChartable(match)                    ? 'type-other'    // red  — non-USPSA/non-HF sport
                          : match.found_by === 'member_number'    ? 'type-uspsa'    // green — confirmed by member #
                          : 'type-unknown';                                          // orange — name-only or not found
 
@@ -609,8 +759,13 @@ function renderMatchList() {
             <th class="col-p">P</th>
           </tr></thead>
           <tbody>
-            ${match.stages.map(s => `<tr>
-              <td>${s.name}</td>
+            ${match.stages.map(s => {
+              const clf = isClassifierStage(s);
+              const badge = clf
+                ? `<span class="classifier-badge" title="${clf.name ? clf.name + ' — ' : ''}CM ${clf.number}">CM ${clf.number}</span>`
+                : '';
+              return `<tr>
+              <td>${badge}${s.name}</td>
               <td>${s.time != null ? s.time.toFixed(2) + 's' : '—'}</td>
               <td>${s.hf   != null ? s.hf.toFixed(4)         : '—'}</td>
               <td>${fmtPct(s.pct)}</td>
@@ -620,7 +775,8 @@ function renderMatchList() {
               <td class="col-m">${s.m || '—'}</td>
               <td class="col-ns">${s.ns || '—'}</td>
               <td class="col-p">${s.p || '—'}</td>
-            </tr>`).join('')}
+            </tr>`;
+            }).join('')}
           </tbody>
         </table>
       `;
@@ -1009,12 +1165,16 @@ function drawMultiSeriesChart(canvas, seriesArr, allDates, opts = {}) {
           const seriesLine = (canvas._hitMap || []).some(x => x.seriesLabel !== h.seriesLabel)
             ? `<div class="tt-meta" style="color:${h.color}">${h.seriesLabel}</div>` : '';
           const stagesHtml = (h.stages && h.stages.length > 0)
-            ? `<div class="tt-stages">${h.stages.map(s => `
+            ? `<div class="tt-stages">${h.stages.map(s => {
+                const clf = isClassifierStage(s);
+                const clfBadge = clf ? `<span class="classifier-badge" title="${clf.name ? clf.name + ' — ' : ''}CM ${clf.number}">CM ${clf.number}</span>` : '';
+                return `
                 <div class="tt-stage-row">
-                  <span class="tt-stage-name">${s.name}</span>
+                  <span class="tt-stage-name">${clfBadge}${s.name}</span>
                   <span class="tt-stage-hf">${s.hf != null ? s.hf.toFixed(4) : '—'}</span>
                   <span class="tt-stage-hits">${s.a ? '<span style="color:#4caf50">' + s.a + 'A</span> ' : ''}${s.c ? '<span style="color:#fdd835">' + s.c + 'C</span> ' : ''}${s.d ? '<span style="color:#ff9800">' + s.d + 'D</span>' : ''}${s.m ? ' <span style="color:#f44336;font-weight:600">' + s.m + 'M</span>' : ''}${s.ns ? ' <span style="color:#f44336;font-weight:600">' + s.ns + 'NS</span>' : ''}${s.p ? ' <span style="color:#f44336">' + s.p + 'P</span>' : ''}</span>
-                </div>`).join('')}</div>` : '';
+                </div>`;
+              }).join('')}</div>` : '';
           tooltipEl.innerHTML = `
             <div class="tt-name">${h.label}</div>
             <div class="tt-date">${h.date || ''}</div>

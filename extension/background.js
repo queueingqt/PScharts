@@ -417,8 +417,46 @@ function scrapeHTMLResultsPage(mem, nm) {
   return { _notFound: true, _rowCount: rows.length };
 }
 
+// ── Fetch match definition JSON from PractiScore S3 ──────────────────────────
+// Returns a Map<stageNum (1-based), { is_classifier: bool, classifier_code: string|null }>
+// or null if the fetch fails or the data is unusable.
+async function fetchMatchDef(matchId, push) {
+  const url = `https://s3.amazonaws.com/ps-scores/production/${matchId}/match_def.json`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) { if (res.status !== 403) push(`     match_def: HTTP ${res.status}`); return null; }
+    const def = await res.json();
+    const raw = def.match_stages || def.stages;
+    if (!Array.isArray(raw) || !raw.length) { push('     match_def: no stages array'); return null; }
+
+    // Log the first stage's full key set so we can identify the real field names
+    console.log('[PScharts] match_def stage[0] keys:', Object.keys(raw[0]));
+    console.log('[PScharts] match_def stage[0]:', JSON.stringify(raw[0]));
+
+    const map = new Map();
+    raw.forEach((s, idx) => {
+      // Stage number: prefer explicit field, fall back to 1-based index
+      const num = s.stage_number ?? s.stage_num ?? (idx + 1);
+
+      // Classifier flag — PractiScore uses various field names; check all known variants
+      const isClf = !!(s.stage_classifiers || s.stage_classifier || s.classifiers || s.classifier);
+
+      // Classifier code (e.g. "99-11") — check known field name variants
+      const code = s.stage_classifier_id ?? s.stage_classifiercode ?? s.classifier_id
+                ?? s.classifiercode ?? s.classifier_code ?? null;
+
+      map.set(num, { is_classifier: isClf || !!code, classifier_code: code || null });
+    });
+    push(`     match_def: ${raw.length} stage(s), ${[...map.values()].filter(v => v.is_classifier).length} classifier(s)`);
+    return map;
+  } catch (e) {
+    push(`     match_def: ${e.message}`);
+    return null;
+  }
+}
+
 // ── Fetch stage stats via #resultLevel dropdown (tab already on results/new) ───
-async function fetchStageData(tabId, matchId, memberNumber, name, divKey, stageOptions, push) {
+async function fetchStageData(tabId, matchId, memberNumber, name, divKey, stageOptions, push, classifierMap) {
   if (!stageOptions || !stageOptions.length) {
     push('     no stage options found');
     return null;
@@ -447,17 +485,19 @@ async function fetchStageData(tabId, matchId, memberNumber, name, divKey, stageO
     const stageNum  = parseInt(opt.text.match(/\d+/)?.[0]) || stages.length + 1;
 
     stages.push({
-      name: stageName,
-      num:  stageNum,
-      time: d.time ?? null,
-      hf:   d.hf   ?? null,
-      pct:  d.overall_pct ?? null,
-      a:    d.a  ?? 0,
-      c:    d.c  ?? 0,
-      d:    d.d  ?? 0,
-      m:    d.m  ?? 0,
-      ns:   d.ns ?? 0,
-      p:    d.p  ?? 0,
+      name:            stageName,
+      num:             stageNum,
+      time:            d.time ?? null,
+      hf:              d.hf   ?? null,
+      pct:             d.overall_pct ?? null,
+      a:               d.a  ?? 0,
+      c:               d.c  ?? 0,
+      d:               d.d  ?? 0,
+      m:               d.m  ?? 0,
+      ns:              d.ns ?? 0,
+      p:               d.p  ?? 0,
+      is_classifier:   null,
+      classifier_code: null,
     });
     push(`     ${opt.text}: ${d.hf?.toFixed(4) ?? '?'} HF  ${d.overall_pct?.toFixed(1) ?? '?'}%`);
   }
@@ -527,8 +567,11 @@ async function fetchScores(memberNumber, name) {
       // Override match type with the confirmed value read from the results page
       if (score._pageMatchType) match.match_type = score._pageMatchType;
 
+      const classifierMap = score.overall_pct != null
+        ? await fetchMatchDef(match.match_id, push)
+        : null;
       const stages = score.overall_pct != null
-        ? await fetchStageData(tabId, match.match_id, memberNumber, name, score._divKey, score._stageOptions, push)
+        ? await fetchStageData(tabId, match.match_id, memberNumber, name, score._divKey, score._stageOptions, push, classifierMap)
         : null;
       const result = buildResult(match, { ...score, stages }, memberNumber);
       // Only cache when a score was actually found — prevents cache poisoning from wrong credentials
@@ -568,12 +611,24 @@ async function refreshMatch(match, memberNumber, name) {
     await waitForTabLoad(tabId);
 
     const score  = await fetchMatchScore(tabId, match.match_id, memberNumber, name, push);
+    if (score._pageMatchType) match.match_type = score._pageMatchType;
+    const classifierMap = score.overall_pct != null
+      ? await fetchMatchDef(match.match_id, push)
+      : null;
     const stages = score.overall_pct != null
-      ? await fetchStageData(tabId, match.match_id, memberNumber, name, score._divKey, score._stageOptions, push)
+      ? await fetchStageData(tabId, match.match_id, memberNumber, name, score._divKey, score._stageOptions, push, classifierMap)
       : null;
     const result = buildResult(match, { ...score, stages }, memberNumber);
     if (result.overall_pct != null) {
       await updateMatchCache(match.match_id, result);
+    }
+
+    // Persist confirmed match type back to lastMatchList
+    if (score._pageMatchType) {
+      const stored = await chrome.storage.local.get('lastMatchList');
+      const list = stored.lastMatchList || [];
+      const idx = list.findIndex(m => m.match_id === match.match_id);
+      if (idx >= 0) { list[idx].match_type = score._pageMatchType; await chrome.storage.local.set({ lastMatchList: list }); }
     }
 
     push(`Done — ${score.overall_pct != null ? score.overall_pct + '%' : 'not found'} [${score.found_by || 'none'}]`);
