@@ -1,6 +1,7 @@
 // background.js — service worker
 
 const PS_BASE = 'https://practiscore.com';
+const USPSA_BASE = 'https://uspsa.org';
 
 // ── Open dashboard tab (or focus if already open) ─────────────────────────────
 chrome.action.onClicked.addListener(async () => {
@@ -20,6 +21,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     fetchScores(msg.memberNumber, msg.name)
       .then(data  => sendResponse({ ok: true,  data }))
       .catch(err  => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (msg.action === 'fetchClassification') {
+    fetchUSPSAClassification(msg.memberNumber, m => console.log('[PScharts]', m))
+      .then(async data => {
+        if (data && !data._not_logged_in) {
+          const stored = { ...data, member_number: msg.memberNumber, updated_at: Date.now() };
+          await chrome.storage.local.set({ classificationData: stored });
+        }
+        sendResponse({ ok: true, data });
+      })
+      .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
   if (msg.action === 'refreshMatch') {
@@ -505,6 +518,173 @@ async function fetchStageData(tabId, matchId, memberNumber, name, divKey, stageO
   return stages.length ? stages : null;
 }
 
+// ── USPSA.org classification page scraper ─────────────────────────────────────
+// Injected into uspsa.org/classification/[memberNumber]
+function scrapeUSPSAClassificationPage() {
+  const url = window.location.href;
+
+  // Login detection
+  if (/[/]login|[/]signin|[?]redirect/i.test(url) ||
+      document.querySelector('input[name="password"], #loginForm, form[action*="login"]')) {
+    return { _not_logged_in: true };
+  }
+
+  const divisions  = {};
+  const classifiers = [];
+
+  // ── Table: Classifications (table with "Classifications" th and division TH-in-row structure)
+  // Structure: tbody rows each have a <th> (division name) + <td> cells like "Class: U", "Pct: 0.0000"
+  for (const table of document.querySelectorAll('table')) {
+    const allThs = [...table.querySelectorAll('th')].map(th => th.textContent.trim());
+    if (!allThs.includes('Classifications')) continue;
+    for (const row of table.querySelectorAll('tbody tr')) {
+      const divTh = row.querySelector('th');
+      if (!divTh) continue;
+      const divName = divTh.textContent.trim();
+      const cells   = [...row.querySelectorAll('td')].map(td => td.textContent.trim());
+      const classCell = cells.find(c => /^class:/i.test(c));
+      const pctCell   = cells.find(c => /^pct:/i.test(c));
+      if (!classCell && !pctCell) continue;
+      divisions[divName] = {
+        class_: classCell ? classCell.replace(/^class:\s*/i, '').trim() : null,
+        pct:    pctCell   ? parseFloat(pctCell.replace(/^pct:\s*/i, '')) || null : null,
+      };
+    }
+  }
+
+  // ── Table: "[Division] Classifiers" — single <th> header, first tbody row is col headers
+  // e.g. "Carry Optics Classifiers (Click to Expand)"
+  for (const table of document.querySelectorAll('table')) {
+    const thText  = table.querySelector('th')?.textContent?.trim() || '';
+    const divMatch = thText.match(/^(.+?)\s+Classifiers\b/i);
+    if (!divMatch) continue;
+    const divName = divMatch[1].trim();
+    const allRows = [...table.querySelectorAll('tbody tr')];
+    if (allRows.length < 2) continue;
+
+    // First tbody row contains column header labels as <td> elements
+    const colHeaders = [...allRows[0].querySelectorAll('td')]
+      .map(td => td.textContent.trim().toLowerCase());
+    const iDate = colHeaders.indexOf('date');
+    const iNum  = colHeaders.indexOf('number');
+    const iPct  = colHeaders.indexOf('percent');
+    const iHF   = colHeaders.indexOf('hf');
+    const iFlag = colHeaders.indexOf('f');
+    const iClub = colHeaders.indexOf('club');
+
+    for (const row of allRows.slice(1)) {
+      const cells = [...row.querySelectorAll('td')].map(td => td.textContent.trim());
+      if (!cells.length) continue;
+      classifiers.push({
+        date:     iDate >= 0 ? cells[iDate] : null,
+        code:     iNum  >= 0 ? cells[iNum]  : null,
+        pct:      iPct  >= 0 ? parseFloat(cells[iPct])  || null : null,
+        hf:       iHF   >= 0 ? parseFloat(cells[iHF])   || null : null,
+        flag:     iFlag >= 0 ? cells[iFlag] : null,  // Y=counts, U=unpaid, P=pending
+        club:     iClub >= 0 ? cells[iClub] : null,
+        division: divName,
+      });
+    }
+  }
+
+  // Division select options — used by fetchUSPSAClassification for calculator loop
+  const divSelect = (() => {
+    const s = document.getElementById('calc_selDiv');
+    return s ? [...s.options].map(o => ({ value: o.value, text: o.textContent.trim() })) : [];
+  })();
+
+  return { divisions, classifiers, divSelect };
+}
+
+// Injected: selects a division in the Classification Calculator and clicks Calculate.
+function triggerClassificationCalculator(divValue) {
+  const sel = document.getElementById('calc_selDiv');
+  if (!sel) return false;
+  sel.value = divValue;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  const calcBtn = [...document.querySelectorAll('button, input[type="button"]')]
+    .find(b => /^calculate$/i.test(b.textContent.trim()) || /^calculate$/i.test(b.value));
+  if (calcBtn) { calcBtn.click(); return true; }
+  return false;
+}
+
+// Injected: reads the Classification Calculator result after it renders.
+// Captures whatever text/elements changed — we log it so we can refine the parser.
+function readCalculatorResult() {
+  // Capture the full result area — try several common selectors
+  const selectors = [
+    '#calcResult', '#calc_result', '.calc-result', '.classification-result',
+    '#classificationResult', '[id*="result"]', '[class*="result"]',
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el && el.textContent.trim()) {
+      return { selector: sel, html: el.innerHTML, text: el.textContent.replace(/\s+/g,' ').trim() };
+    }
+  }
+  // Fallback: capture text near the Calculate button
+  const calcBtn = [...document.querySelectorAll('button')]
+    .find(b => /^calculate$/i.test(b.textContent.trim()));
+  if (calcBtn) {
+    const container = calcBtn.closest('div, section, form') || calcBtn.parentElement;
+    return { selector: 'parent', html: container?.innerHTML, text: container?.textContent.replace(/\s+/g,' ').trim().slice(0, 400) };
+  }
+  return null;
+}
+
+// Fetches USPSA classification for the given member number.
+// Returns { divisions, classifiers } or { _not_logged_in: true } or null on error.
+async function fetchUSPSAClassification(memberNumber, push) {
+  if (!memberNumber) return null;
+  let tabId = null;
+  try {
+    push('Fetching USPSA classification…');
+    const tab = await chrome.tabs.create({
+      url: `${USPSA_BASE}/classification/${memberNumber}`,
+      active: false,
+    });
+    tabId = tab.id;
+    await waitForTabLoad(tabId);
+    await sleep(2000);
+
+    const state = await runInTab(tabId, scrapeUSPSAClassificationPage);
+
+    if (state?._not_logged_in) {
+      push('  Not logged into USPSA.org — classification data unavailable');
+      return { _not_logged_in: true };
+    }
+
+    // Log compact debug info — tables and division select only
+    console.log('[PScharts] USPSA page debug:', JSON.stringify(state._debug, null, 2));
+    // Log the actual parsed classifier records so we can verify dates/pcts/codes
+    console.log('[PScharts] USPSA classifiers parsed:', JSON.stringify(state.classifiers, null, 2));
+
+    const clf = state?.classifiers?.length ?? 0;
+    push(`  Found ${clf} classifier record(s) for ${memberNumber}`);
+
+    // ── Classification Calculator: iterate each division to get D-GM class ──────
+    const divOptions = state._debug?.divSelect || [];
+    const divClassifications = { ...state.divisions };
+
+    for (const opt of divOptions) {
+      const triggered = await runInTab(tabId, triggerClassificationCalculator, [opt.value]);
+      if (!triggered) { push(`  Calculator not found — skipping division loop`); break; }
+      await sleep(1200);
+      const result = await runInTab(tabId, readCalculatorResult);
+      console.log(`[PScharts] Calculator result for ${opt.text}:`, JSON.stringify(result));
+      if (result?.text) push(`  ${opt.text}: ${result.text.slice(0, 80)}`);
+    }
+
+    return { classifiers: state.classifiers, divisions: divClassifications } ?? null;
+
+  } catch (e) {
+    push(`  USPSA classification error: ${e.message}`);
+    return null;
+  } finally {
+    if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+  }
+}
+
 // ── Fetch all match scores ────────────────────────────────────────────────────
 async function fetchScores(memberNumber, name) {
   const log = [];
@@ -517,6 +697,13 @@ async function fetchScores(memberNumber, name) {
     tabId = tab.id;
     await waitForTabLoad(tabId);
     await sleep(2500);
+
+    // Check PractiScore login — if redirected away from associate page, not logged in
+    const psTab = await chrome.tabs.get(tabId);
+    if (psTab.url && !psTab.url.includes('practiscore.com/associate')) {
+      push('Not logged into PractiScore — please log in at practiscore.com and try again.');
+      return { results: [], log, _not_logged_in_ps: true };
+    }
 
     const rawMatchList = await runInTab(tabId, extractMatchList);
     push(`Found ${rawMatchList.length} match(es).`);
@@ -588,7 +775,21 @@ async function fetchScores(memberNumber, name) {
 
     const n = results.filter(r => r.overall_pct != null).length;
     push(`Done — ${n}/${uspsaMatches.length} matches with scores.`);
-    return { results, log };
+
+    // Fetch USPSA classification only if at least one scored match was found
+    let classificationData = null;
+    let _not_logged_in_uspsa = false;
+    if (memberNumber && n > 0) {
+      const clfResult = await fetchUSPSAClassification(memberNumber, push);
+      if (clfResult?._not_logged_in) {
+        _not_logged_in_uspsa = true;
+      } else if (clfResult) {
+        classificationData = { ...clfResult, member_number: memberNumber, updated_at: Date.now() };
+        await chrome.storage.local.set({ classificationData });
+      }
+    }
+
+    return { results, log, classificationData, _not_logged_in_uspsa };
 
   } finally {
     if (tabId) chrome.tabs.remove(tabId).catch(() => {});

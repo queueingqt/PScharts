@@ -102,6 +102,8 @@ let currentView      = 'ranked'; // 'ranked' | 'all'
 let deselectedMatches = new Set(); // match IDs manually excluded from charts
 let selectedDiv      = null;     // division filter for stats + charts (null = All)
 let selectedYear     = null;     // year filter for charts (null = All Time)
+let classificationData = null;  // data from uspsa.org/classification/[memberNumber]
+let classifiersOnly  = false;   // when true, charts show only classifier stage scores
 
 const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE', 'SCSA']);
 function isLikelyUSPSA(matchType) { return !NON_USPSA_TYPES.has(matchType); }
@@ -256,6 +258,39 @@ function isClassifierStage(stage) {
   return null;
 }
 
+// Normalize USPSA date "M/D/YY" or "MM/DD/YYYY" → "YYYY-MM" for comparison
+function normalizeUSPSADate(dateStr) {
+  if (!dateStr) return null;
+  const m = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return null;
+  const year = m[3].length === 2 ? '20' + m[3] : m[3];
+  return `${year}-${m[1].padStart(2, '0')}`;
+}
+
+// Cross-reference allResults stages against USPSA.org classifier records.
+// Annotates stages with is_classifier / classifier_code when a match is found by
+// HF value (exact to 3 decimal places) + month of match date.
+function crossReferenceClassifiers(results, clfData) {
+  if (!clfData?.classifiers?.length) return results;
+  return results.map(r => {
+    if (!r.stages?.length) return r;
+    const stages = r.stages.map(s => {
+      if (s.is_classifier) return s; // already identified by match_def.json
+      const clf = clfData.classifiers.find(c => {
+        if (!c.hf || !s.hf) return false;
+        const cDate = normalizeUSPSADate(c.date);
+        const rDate = r.date ? r.date.slice(0, 7) : null;
+        if (!cDate || !rDate || cDate !== rDate) return false;
+        return Math.abs(c.hf - s.hf) < 0.001;
+      });
+      if (!clf) return s;
+      return { ...s, is_classifier: true, classifier_code: clf.code || null,
+               clf_pct: clf.pct || null }; // official USPSA % (vs national reference HF)
+    });
+    return { ...r, stages };
+  });
+}
+
 function saveDeselected() {
   chrome.storage.local.set({ deselectedMatches: [...deselectedMatches] });
 }
@@ -326,7 +361,7 @@ saveBtn.addEventListener('click', async () => {
 });
 
 // ── Restore persisted state on load ──────────────────────────────────────────
-chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache', 'deselectedMatches'], d => {
+chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache', 'deselectedMatches', 'classificationData'], d => {
   if (d.memberNumber) memberInput.value = d.memberNumber;
   if (d.name)         nameInput.value   = d.name;
   if (d.deselectedMatches) deselectedMatches = new Set(d.deselectedMatches);
@@ -344,7 +379,8 @@ chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache',
       _cached: true,
     }));
     if (restored.length > 0) {
-      allResults = restored;
+      classificationData = d.classificationData || null;
+      allResults = crossReferenceClassifiers(restored, classificationData);
       if (!d.memberNumber) switchView('all');
       renderAll();
       renderMatchList();
@@ -359,6 +395,15 @@ chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache',
 function switchView(view) {
   currentView = view;
   document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  const toggleWrap = document.getElementById('classifiersToggleWrap');
+  if (view !== 'ranked') {
+    classifiersOnly = false;
+    document.getElementById('classifiersOnlyChk').checked = false;
+    toggleWrap.classList.remove('active');
+    toggleWrap.style.display = 'none';
+  } else {
+    toggleWrap.style.display = 'flex';
+  }
 }
 
 document.querySelectorAll('.view-btn').forEach(btn => {
@@ -366,6 +411,12 @@ document.querySelectorAll('.view-btn').forEach(btn => {
     switchView(btn.dataset.view);
     renderAll();
   });
+});
+
+document.getElementById('classifiersOnlyChk').addEventListener('change', e => {
+  classifiersOnly = e.target.checked;
+  document.getElementById('classifiersToggleWrap').classList.toggle('active', classifiersOnly);
+  renderAll();
 });
 
 // ── Fetch button ──────────────────────────────────────────────────────────────
@@ -411,6 +462,12 @@ fetchBtn.addEventListener('click', async () => {
   try {
     const response = await chrome.runtime.sendMessage({ action: 'fetchScores', memberNumber, name });
     if (!response.ok) throw new Error(response.error || 'Unknown error');
+    if (response.data._not_logged_in_ps) {
+      document.getElementById('psLoginWarning').style.display = 'block';
+      setStatus('Not logged into PractiScore. Please log in and try again.', 'error');
+      return;
+    }
+    document.getElementById('psLoginWarning').style.display = 'none';
 
     const { results, log } = response.data;
 
@@ -425,17 +482,28 @@ fetchBtn.addEventListener('click', async () => {
       return;
     }
 
-    allResults = results;
+    if (response.data.classificationData) {
+      classificationData = response.data.classificationData;
+    }
+    allResults = crossReferenceClassifiers(results, classificationData);
 
-    // No member number → name-only results won't appear in "Scored Only" view; switch automatically
+    // Handle login warnings
+    const uspsaLoginWarn = document.getElementById('uspsaLoginWarning');
+    if (response.data._not_logged_in_uspsa) {
+      uspsaLoginWarn.style.display = 'block';
+    } else {
+      uspsaLoginWarn.style.display = 'none';
+    }
+
+    // No member number → name-only results won't appear in "Scored Matches" view; switch automatically
     if (!memberNumber) switchView('all');
 
     renderAll();
     renderMatchList();
 
-    const uspsa  = results.filter(r => isLikelyUSPSA(r.match_type || 'Unknown')).length;
-    const nonUspsa = results.length - uspsa;
-    const scored = results.filter(r => r.overall_pct != null).length;
+    const uspsa  = allResults.filter(r => isLikelyUSPSA(r.match_type || 'Unknown')).length;
+    const nonUspsa = allResults.length - uspsa;
+    const scored = allResults.filter(r => r.overall_pct != null).length;
     const skippedNote = nonUspsa > 0 ? ` · ${nonUspsa} non-USPSA match(es) excluded from charts` : '';
     setStatus(`Loaded ${uspsa} USPSA match(es) — ${scored} with scores.${skippedNote}`, 'success');
 
@@ -486,6 +554,17 @@ function renderYearFilter(years) {
 }
 
 // ── Render charts + stats ─────────────────────────────────────────────────────
+function setPlacementVisible(visible) {
+  const el = document.getElementById('chartPlaceSection');
+  if (visible) {
+    el.style.display = '';
+  } else if (el.style.display !== 'none') {
+    const h = el.offsetHeight;
+    el.style.display = 'none';
+    window.scrollBy({ top: -h, behavior: 'instant' });
+  }
+}
+
 function renderAll() {
   if (!allResults.length) return;
 
@@ -512,6 +591,7 @@ function renderAll() {
   summaryBar.classList.add('visible');
   chartsEl.classList.add('visible');
   sizeCanvases();
+  document.getElementById('classifiersToggleWrap').style.display = currentView === 'ranked' ? 'flex' : 'none';
 
   if (sorted.length === 0) {
     const msg = currentView === 'ranked'
@@ -592,8 +672,95 @@ function renderAll() {
   // Year filter pills
   renderYearFilter(years);
 
+  // Official classification stat box (D-GM class from USPSA.org)
+  renderClassBox(selectedDiv || (divs.length === 1 ? divs[0] : null));
+
   const avgLbl = document.querySelector('#statMatches')?.closest('#stats')
     ?.querySelectorAll('.stat-box')[1]?.querySelector('.lbl');
+
+  // ── Classifiers Only mode ────────────────────────────────────────────────────
+  if (classifiersOnly) {
+    // Collect all classifier stages from viewSorted matches.
+    // Use clf_pct (official USPSA %, vs national reference HF) when available;
+    // fall back to stage pct from PractiScore (vs match top HF — less accurate).
+    const clfPoints = [];
+    for (const r of viewSorted) {
+      if (!r.stages) continue;
+      for (const s of r.stages) {
+        const clf = isClassifierStage(s);
+        if (!clf) continue;
+        const officialPct = s.clf_pct ?? null;
+        const displayPct  = officialPct ?? s.pct;
+        if (displayPct == null) continue;
+        clfPoints.push({
+          date: r.date,
+          y: displayPct,
+          isOfficial: officialPct != null,
+          hf: s.hf,
+          label: clf.number ? `CM ${clf.number}${clf.name ? ' · ' + clf.name : ''}` : 'Classifier',
+          match_name: r.match_name,
+          division: r.division || 'Unknown',
+          code: clf.number,
+          a: s.a, c: s.c, d: s.d, m: s.m, ns: s.ns, p: s.p,
+        });
+      }
+    }
+
+    // Sort chronologically
+    clfPoints.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+    if (clfPoints.length === 0) {
+      document.getElementById('statMatches').textContent = '0';
+      document.getElementById('statAvg').textContent  = '—';
+      document.getElementById('statBest').textContent = '—';
+      document.getElementById('chartTimeTitle').textContent = 'Classifier Scores Over Time';
+      drawMessage(document.getElementById('chartTime'), 'No classifier stages found.\nRefresh matches to detect classifiers.');
+      setPlacementVisible(false);
+      return;
+    }
+
+    // Stats: use official pcts where available
+    const officialPcts = clfPoints.filter(p => p.isOfficial).map(p => p.y);
+    const statPcts     = officialPcts.length ? officialPcts : clfPoints.map(p => p.y);
+    const clfAvg  = statPcts.reduce((s, v) => s + v, 0) / statPcts.length;
+    const clfBest = Math.max(...statPcts);
+    const avgBandC  = CLASS_BANDS.find(b => clfAvg  >= b.min && clfAvg  < b.max);
+    const bestBandC = CLASS_BANDS.find(b => clfBest >= b.min && clfBest < b.max);
+
+    document.getElementById('statMatches').textContent = clfPoints.length;
+    document.getElementById('statAvg').textContent  = clfAvg.toFixed(1) + '%';
+    document.getElementById('statAvg').style.color  = avgBandC?.text.replace('0.55','1') || '#4a9eff';
+    document.getElementById('statBest').textContent = clfBest.toFixed(1) + '%';
+    document.getElementById('statBest').style.color = bestBandC?.text.replace('0.55','1') || '#4a9eff';
+    if (avgLbl) avgLbl.textContent = avgBandC ? `Avg % · ${avgBandC.label} Class` : 'Avg %';
+
+    // Build series grouped by division — gives continuous lines over time
+    const DIV_PALETTE = ['#4a9eff','#4caf50','#ff9800','#e91e63','#9c27b0','#00bcd4','#ffeb3b','#ff5722'];
+    const divKeys = [...new Set(clfPoints.map(p => p.division))];
+    const series = divKeys.map((div, i) => ({
+      label: div,
+      color: DIV_PALETTE[i % DIV_PALETTE.length],
+      points: clfPoints
+        .filter(p => p.division === div)
+        .map(p => ({ date: p.date, y: p.y, label: p.label, match_name: p.match_name, hf: p.hf,
+                     isOfficial: p.isOfficial, a: p.a, c: p.c, d: p.d, m: p.m, ns: p.ns, p_: p.p })),
+    }));
+
+    const allClfDates = [...new Set(clfPoints.map(p => p.date))].sort();
+
+    document.getElementById('chartTimeTitle').textContent = 'Classifier Scores Over Time'
+      + (officialPcts.length ? ' (official %)' : ' (match % — log in to USPSA.org for official %)');
+    drawMultiSeriesChart(document.getElementById('chartTime'), series, allClfDates, {
+      yLabel: 'Classifier %', yMin: 0, yMax: 100, invertY: false, trend: series.length === 1, valueUnit: '%',
+      showClassBands: true,
+    });
+    setPlacementVisible(false);
+    return;
+  }
+
+  // ── Normal mode ──────────────────────────────────────────────────────────────
+  document.getElementById('chartTimeTitle').textContent = 'Score Over Time';
+  setPlacementVisible(true);
   if (avgLbl) avgLbl.textContent = avgBand ? `Avg % · ${avgBand.label} Class` : 'Avg %';
 
   const DIV_PALETTE = ['#4a9eff','#4caf50','#ff9800','#e91e63','#9c27b0','#00bcd4','#ffeb3b'];
@@ -832,6 +999,32 @@ function renderMatchList() {
 
     matchRowsEl.appendChild(item);
   });
+}
+
+// ── Render official class badge in the stat box ────────────────────────────────
+// Shows the USPSA.org classification for the currently selected (or most common) division.
+function renderClassBox(viewSortedDivision) {
+  const box = document.getElementById('statClassBox');
+  const val = document.getElementById('statClass');
+  if (!classificationData?.divisions) { box.style.display = 'none'; return; }
+
+  const divs = classificationData.divisions;
+  // Use the selected division key, or try to match by substring, or first available
+  let info = null;
+  if (viewSortedDivision) {
+    const key = Object.keys(divs).find(k =>
+      k.toLowerCase().includes(viewSortedDivision.toLowerCase().slice(0, 4)) ||
+      viewSortedDivision.toLowerCase().includes(k.toLowerCase().slice(0, 4))
+    );
+    if (key) info = divs[key];
+  }
+  if (!info) info = Object.values(divs)[0];
+  if (!info?.class_) { box.style.display = 'none'; return; }
+
+  const c = info.class_.toUpperCase();
+  const pctStr = info.pct != null ? `<span style="font-size:11px;color:#666">${info.pct.toFixed(1)}%</span>` : '';
+  val.innerHTML = `<span class="class-badge class-${c.toLowerCase()}">${c}</span> ${pctStr}`;
+  box.style.display = '';
 }
 
 // ── Delete a match from history/cache ────────────────────────────────────────
@@ -1164,6 +1357,19 @@ function drawMultiSeriesChart(canvas, seriesArr, allDates, opts = {}) {
             ? `<div class="tt-meta" style="color:#ff9800">matched by name</div>` : '';
           const seriesLine = (canvas._hitMap || []).some(x => x.seriesLabel !== h.seriesLabel)
             ? `<div class="tt-meta" style="color:${h.color}">${h.seriesLabel}</div>` : '';
+          const matchNameLine = (h.match_name && h.match_name !== h.label)
+            ? `<div class="tt-meta">${h.match_name}</div>` : '';
+          const hfLine = (h.hf != null && !h.stages?.length)
+            ? `<div class="tt-meta">HF ${h.hf.toFixed(4)}</div>` : '';
+          const hitsLine = (!h.stages?.length && (h.a || h.c || h.d || h.m || h.ns || h.p_))
+            ? `<div class="tt-meta">${[
+                h.a  ? `<span style="color:#4caf50">${h.a}A</span>`                    : '',
+                h.c  ? `<span style="color:#fdd835">${h.c}C</span>`                    : '',
+                h.d  ? `<span style="color:#ff9800">${h.d}D</span>`                    : '',
+                h.m  ? `<span style="color:#f44336;font-weight:600">${h.m}M</span>`   : '',
+                h.ns ? `<span style="color:#f44336;font-weight:600">${h.ns}NS</span>` : '',
+                h.p_ ? `<span style="color:#f44336">${h.p_}P</span>`                  : '',
+              ].filter(Boolean).join(' ')}</div>` : '';
           const stagesHtml = (h.stages && h.stages.length > 0)
             ? `<div class="tt-stages">${h.stages.map(s => {
                 const clf = isClassifierStage(s);
@@ -1178,7 +1384,7 @@ function drawMultiSeriesChart(canvas, seriesArr, allDates, opts = {}) {
           tooltipEl.innerHTML = `
             <div class="tt-name">${h.label}</div>
             <div class="tt-date">${h.date || ''}</div>
-            ${mainVal}${divLine}${overallLine}${pctLine}${seriesLine}${nameLine}${stagesHtml}
+            ${mainVal}${divLine}${overallLine}${pctLine}${seriesLine}${nameLine}${matchNameLine}${hfLine}${hitsLine}${stagesHtml}
           `;
         }
         const tw = 300, th = (h.multiMatch || h.stages?.length) ? 280 : 130;

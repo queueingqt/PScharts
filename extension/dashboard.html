@@ -6,6 +6,9 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html {
+      overflow-y: scroll;
+    }
     html, body {
       min-height: 100vh;
       background: #0f1117;
@@ -170,14 +173,63 @@
       padding: 16px 24px;
       border-top: 1px solid #1e2130;
     }
+    .chart-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
     .chart-section h3 {
       font-size: 11px;
       font-weight: 600;
       color: #555;
       text-transform: uppercase;
       letter-spacing: 0.8px;
-      margin-bottom: 12px;
+      margin-bottom: 0;
     }
+
+    #classifiersToggleWrap {
+      display: none;
+      align-items: center;
+      gap: 7px;
+      cursor: pointer;
+      user-select: none;
+    }
+    #classifiersToggleWrap .toggle-lbl {
+      font-size: 11px;
+      font-weight: 600;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+    /* pill switch */
+    .toggle-switch {
+      position: relative;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: #2a2d3a;
+      border-radius: 18px;
+      transition: background 0.2s;
+    }
+    .toggle-thumb {
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: #555;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-switch input:checked ~ .toggle-track { background: #1e3a5f; }
+    .toggle-switch input:checked ~ .toggle-track .toggle-thumb { transform: translateX(14px); background: #4a9eff; }
+    #classifiersToggleWrap:hover .toggle-track { background: #3a3d4a; }
+    #classifiersToggleWrap:hover .toggle-lbl { color: #888; }
+    #classifiersToggleWrap.active .toggle-lbl { color: #4a9eff; }
 
     canvas { display: block; width: 100% !important; }
 
@@ -401,6 +453,32 @@
     }
     #updateBannerNotes.open { display: block; }
 
+    /* ── Login warnings ── */
+    .login-warning {
+      display: none;
+      margin: 0 24px 8px;
+      padding: 10px 14px;
+      background: rgba(244,67,54,0.08);
+      border: 1px solid rgba(244,67,54,0.3);
+      border-radius: 6px;
+      color: #f44336;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .login-warning a { color: #f44336; }
+
+    /* ── Class badge (used in stat box + classifier labels) ── */
+    .class-badge {
+      font-size: 11px; font-weight: 700; padding: 1px 5px; border-radius: 3px; display: inline-block;
+    }
+    .class-gm { color: #ffd700; background: rgba(255,215,0,0.15); }
+    .class-m  { color: #e040fb; background: rgba(224,64,251,0.15); }
+    .class-a  { color: #4caf50; background: rgba(76,175,80,0.15); }
+    .class-b  { color: #4a9eff; background: rgba(74,158,255,0.15); }
+    .class-c  { color: #ff9800; background: rgba(255,152,0,0.15); }
+    .class-d  { color: #8a9bb0; background: rgba(138,155,176,0.15); }
+    .class-u  { color: #666;    background: rgba(100,100,100,0.15); }
+
     /* ── No-member-number warning ── */
     #noMemberWarning {
       display: none;
@@ -481,6 +559,12 @@
   <div id="updateBannerNotes"></div>
 </div>
 
+<div id="psLoginWarning" class="login-warning">
+  Not logged into PractiScore. <a href="https://practiscore.com/login" target="_blank">Log in here</a>, then try again.
+</div>
+<div id="uspsaLoginWarning" class="login-warning">
+  Not logged into USPSA.org — classification data unavailable. <a href="https://uspsa.org/login" target="_blank">Log in here</a> to enable classifier cross-referencing.
+</div>
 <div id="noMemberWarning">
   No USPSA member number entered — scores will be matched by name only and shown under "All Matches" view.
   For confirmed results, add your member number and click Edit → Save.
@@ -498,9 +582,10 @@
     <div class="stat-box"><div class="val" id="statAvg">—</div><div class="lbl">Avg %</div></div>
     <div class="stat-box"><div class="val" id="statBest">—</div><div class="lbl">Best %</div></div>
     <div class="stat-box"><div class="val" id="statDiv">—</div><div class="lbl">Division</div></div>
+    <div class="stat-box" id="statClassBox" style="display:none"><div class="val" id="statClass">—</div><div class="lbl">Class</div></div>
   </div>
   <div id="viewToggle">
-    <button class="view-btn active" data-view="ranked">Scored Only</button>
+    <button class="view-btn active" data-view="ranked">Scored Matches</button>
     <button class="view-btn"        data-view="all">All Matches</button>
   </div>
 </div>
@@ -509,10 +594,19 @@
 
 <div id="charts">
   <div class="chart-section">
-    <h3>Score Over Time</h3>
+    <div class="chart-section-header">
+      <h3 id="chartTimeTitle">Score Over Time</h3>
+      <label id="classifiersToggleWrap">
+        <span class="toggle-lbl">Classifiers Only</span>
+        <span class="toggle-switch">
+          <input type="checkbox" id="classifiersOnlyChk">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </span>
+      </label>
+    </div>
     <canvas id="chartTime" height="220"></canvas>
   </div>
-  <div class="chart-section">
+  <div class="chart-section" id="chartPlaceSection">
     <h3>Placement Over Time</h3>
     <canvas id="chartPlace" height="180"></canvas>
   </div>
