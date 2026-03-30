@@ -1125,14 +1125,49 @@ const TEXT_COLOR = '#666';
 const FONT       = '10px system-ui, sans-serif';
 
 // USPSA classification bands (% thresholds)
+// weight: visual height allocation — higher = more chart space (harder classes get more room)
 const CLASS_BANDS = [
-  { label: 'GM', min: 95,  max: 110, fill: 'rgba(255,215,0,0.07)',    text: 'rgba(255,215,0,0.55)' },
-  { label: 'M',  min: 85,  max: 95,  fill: 'rgba(192,192,192,0.07)', text: 'rgba(192,192,192,0.55)' },
-  { label: 'A',  min: 75,  max: 85,  fill: 'rgba(74,158,255,0.07)',  text: 'rgba(74,158,255,0.55)' },
-  { label: 'B',  min: 60,  max: 75,  fill: 'rgba(76,175,80,0.07)',   text: 'rgba(76,175,80,0.55)' },
-  { label: 'C',  min: 40,  max: 60,  fill: 'rgba(255,152,0,0.07)',   text: 'rgba(255,152,0,0.55)' },
-  { label: 'D',  min: 0,   max: 40,  fill: 'rgba(120,120,120,0.07)', text: 'rgba(120,120,120,0.55)' },
+  { label: 'GM', min: 95,  max: 110, weight: 6, fill: 'rgba(255,215,0,0.07)',    text: 'rgba(255,215,0,0.55)' },
+  { label: 'M',  min: 85,  max: 95,  weight: 5, fill: 'rgba(192,192,192,0.07)', text: 'rgba(192,192,192,0.55)' },
+  { label: 'A',  min: 75,  max: 85,  weight: 4, fill: 'rgba(74,158,255,0.07)',  text: 'rgba(74,158,255,0.55)' },
+  { label: 'B',  min: 60,  max: 75,  weight: 3, fill: 'rgba(76,175,80,0.07)',   text: 'rgba(76,175,80,0.55)' },
+  { label: 'C',  min: 40,  max: 60,  weight: 2, fill: 'rgba(255,152,0,0.07)',   text: 'rgba(255,152,0,0.55)' },
+  { label: 'D',  min: 0,   max: 40,  weight: 1, fill: 'rgba(120,120,120,0.07)', text: 'rgba(120,120,120,0.55)' },
 ];
+
+// Build a piecewise warp map that gives more visual space to harder (higher) classes.
+// Returns [{real, visual}] breakpoints from lo to hi, or null if no bands overlap.
+function buildWarpMap(lo, hi) {
+  const segs = [];
+  for (let i = CLASS_BANDS.length - 1; i >= 0; i--) {  // iterate low→high
+    const b = CLASS_BANDS[i];
+    const segLo = Math.max(b.min, lo);
+    const segHi = Math.min(b.max, hi);
+    if (segLo >= segHi) continue;
+    segs.push({ lo: segLo, hi: segHi, weight: b.weight });
+  }
+  if (segs.length < 2) return null;  // single band: linear is fine
+  const totalWeight = segs.reduce((s, g) => s + g.weight, 0);
+  const pts = [{ real: segs[0].lo, visual: 0 }];
+  let vPos = 0;
+  for (const seg of segs) {
+    vPos += seg.weight / totalWeight;
+    pts.push({ real: seg.hi, visual: vPos });
+  }
+  return pts;
+}
+
+// Map a real % value to a [0,1] visual position using a warp map.
+function warpPct(v, pts) {
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i - 1], c = pts[i];
+    if (v <= c.real + 0.001) {
+      const t = (v - p.real) / (c.real - p.real);
+      return p.visual + t * (c.visual - p.visual);
+    }
+  }
+  return 1;
+}
 
 function bandForPct(pct) {
   return CLASS_BANDS.find(b => pct >= b.min && pct < b.max) || null;
@@ -1177,12 +1212,14 @@ function drawMultiSeriesChart(canvas, seriesArr, allDates, opts = {}) {
   const rawMax = yMax != null ? yMax : Math.max(...allY);
   const yRange = rawMax - rawMin || 1;
 
+  const warpMap = showClassBands ? buildWarpMap(rawMin, rawMax) : null;
+
   const dateToCanvasX = date => {
     const idx = allDates.indexOf(date);
     return area.x0 + (idx / Math.max(allDates.length - 1, 1)) * area.w;
   };
   const toY = v => {
-    const norm = (v - rawMin) / yRange;
+    const norm = warpMap ? warpPct(v, warpMap) : (v - rawMin) / yRange;
     return invertY ? area.y0 + norm * area.h : area.y0 + (1 - norm) * area.h;
   };
 
@@ -1223,11 +1260,23 @@ function drawMultiSeriesChart(canvas, seriesArr, allDates, opts = {}) {
 
   // Grid
   ctx.strokeStyle = GRID_COLOR; ctx.lineWidth = 1;
-  for (let i = 0; i <= 5; i++) {
-    const v = rawMin + yRange * i / 5, cy = toY(v);
-    ctx.beginPath(); ctx.moveTo(area.x0, cy); ctx.lineTo(area.x0 + area.w, cy); ctx.stroke();
-    ctx.fillStyle = TEXT_COLOR; ctx.font = FONT; ctx.textAlign = 'right';
-    ctx.fillText(v.toFixed(0), area.x0 - 5, cy + 3);
+  if (warpMap) {
+    // Warped axis: tick marks at band boundaries only
+    const boundaries = new Set([rawMin, rawMax]);
+    CLASS_BANDS.forEach(b => { if (b.min > rawMin && b.min < rawMax) boundaries.add(b.min); });
+    [...boundaries].sort((a, b) => a - b).forEach(v => {
+      const cy = toY(v);
+      ctx.beginPath(); ctx.moveTo(area.x0, cy); ctx.lineTo(area.x0 + area.w, cy); ctx.stroke();
+      ctx.fillStyle = TEXT_COLOR; ctx.font = FONT; ctx.textAlign = 'right';
+      ctx.fillText(v.toFixed(0), area.x0 - 5, cy + 3);
+    });
+  } else {
+    for (let i = 0; i <= 5; i++) {
+      const v = rawMin + yRange * i / 5, cy = toY(v);
+      ctx.beginPath(); ctx.moveTo(area.x0, cy); ctx.lineTo(area.x0 + area.w, cy); ctx.stroke();
+      ctx.fillStyle = TEXT_COLOR; ctx.font = FONT; ctx.textAlign = 'right';
+      ctx.fillText(v.toFixed(0), area.x0 - 5, cy + 3);
+    }
   }
 
   // Axes
