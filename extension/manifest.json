@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "PScharts",
-  "version": "0.8",
-  "description": "PScharts 0.8 — Chart your USPSA match scores from PractiScore",
+  "version": "0.9",
+  "description": "PScharts 0.9 — Chart your USPSA match scores from PractiScore",
   "permissions": ["tabs", "scripting", "storage"],
-  "host_permissions": ["https://practiscore.com/*", "https://s3.amazonaws.com/*", "https://api.github.com/*", "https://uspsa.org/*"],
+  "host_permissions": ["https://practiscore.com/*", "https://s3.amazonaws.com/*", "https://api.github.com/*", "https://uspsa.org/*", "https://objects.githubusercontent.com/*"],
   "content_security_policy": {
-    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https://practiscore.com https://s3.amazonaws.com https://api.github.com https://uspsa.org"
+    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https://practiscore.com https://s3.amazonaws.com https://api.github.com https://uspsa.org https://objects.githubusercontent.com"
   },
   "icons": {
     "16":  "icons/icon16.png",

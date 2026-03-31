@@ -43,34 +43,6 @@ function isNewer(latest, current) {
   return false;
 }
 
-async function checkForUpdate() {
-  const { updateCheck } = await chrome.storage.local.get('updateCheck');
-  const now = Date.now();
-
-  if (updateCheck && (now - updateCheck.checkedAt) < CHECK_INTERVAL_MS) {
-    if (updateCheck.latestVersion && updateCheck.downloadUrl) {
-      showUpdateBanner(updateCheck.latestVersion, updateCheck.downloadUrl, updateCheck.releaseNotes || '');
-    }
-    return;
-  }
-
-  try {
-    const res = await fetch(RELEASES_API);
-    if (!res.ok) return;
-    const data = await res.json();
-    const latestVersion = (data.tag_name || '').replace(/^v/, '');
-    // Sanitize downloadUrl: only allow https://github.com URLs to prevent XSS via injected href
-    const rawUrl    = data.html_url || '';
-    const downloadUrl = /^https:\/\/github\.com\//.test(rawUrl)
-      ? rawUrl
-      : 'https://github.com/johnwaldo/PScharts/releases/latest';
-    const releaseNotes  = (data.body || '').trim();
-
-    await chrome.storage.local.set({ updateCheck: { latestVersion, downloadUrl, releaseNotes, checkedAt: now } });
-    showUpdateBanner(latestVersion, downloadUrl, releaseNotes);
-  } catch (_) {}
-}
-
 // Escape HTML special characters to prevent XSS when inserting untrusted text into innerHTML
 function escHtml(str) {
   return String(str ?? '')
@@ -81,32 +53,90 @@ function escHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
-function showUpdateBanner(latestVersion, downloadUrl, releaseNotes) {
+async function checkForUpdate() {
+  // Don't show banner if user dismissed this version already
+  const { updateCheck, updateDismissed } = await chrome.storage.local.get(['updateCheck', 'updateDismissed']);
+  const now = Date.now();
+
+  // Use cached result if fresh enough
+  if (updateCheck && (now - updateCheck.checkedAt) < CHECK_INTERVAL_MS) {
+    if (updateCheck.latestVersion && updateCheck.zipUrl &&
+        updateDismissed !== updateCheck.latestVersion) {
+      showUpdateBanner(updateCheck.latestVersion, updateCheck.zipUrl, updateCheck.releasePageUrl, updateCheck.releaseNotes || '');
+    }
+    return;
+  }
+
+  try {
+    const res = await fetch(RELEASES_API);
+    if (!res.ok) return;
+    const data = await res.json();
+    const latestVersion = (data.tag_name || '').replace(/^v/, '');
+
+    // Sanitize release page URL — must be github.com
+    const rawPageUrl   = data.html_url || '';
+    const releasePageUrl = /^https:\/\/github\.com\//.test(rawPageUrl)
+      ? rawPageUrl
+      : 'https://github.com/johnwaldo/PScharts/releases/latest';
+
+    // Find the ZIP asset — prefer pscharts-*.zip, fall back to any .zip
+    const assets  = Array.isArray(data.assets) ? data.assets : [];
+    const zipAsset = assets.find(a => /pscharts.*\.zip$/i.test(a.name))
+                  || assets.find(a => /\.zip$/i.test(a.name));
+    // Sanitize asset download URL — must be github.com or objects.githubusercontent.com
+    const rawZip  = zipAsset?.browser_download_url || '';
+    const zipUrl  = /^https:\/\/(github\.com|objects\.githubusercontent\.com)\//.test(rawZip)
+      ? rawZip
+      : releasePageUrl; // fall back to release page if no ZIP attached
+
+    const releaseNotes = (data.body || '').trim();
+
+    await chrome.storage.local.set({
+      updateCheck: { latestVersion, zipUrl, releasePageUrl, releaseNotes, checkedAt: now },
+    });
+
+    if (updateDismissed !== latestVersion) {
+      showUpdateBanner(latestVersion, zipUrl, releasePageUrl, releaseNotes);
+    }
+  } catch (_) {}
+}
+
+function showUpdateBanner(latestVersion, zipUrl, releasePageUrl, releaseNotes) {
   const currentVersion = chrome.runtime.getManifest().version;
   if (!isNewer(latestVersion, currentVersion)) return;
 
-  const banner    = document.getElementById('updateBanner');
-  const textEl    = document.getElementById('updateBannerText');
-  const notesEl   = document.getElementById('updateBannerNotes');
-  const toggleBtn = document.getElementById('updateNotesToggle');
+  // Wire up version badge
+  document.getElementById('updateVersionBadge').textContent = `v${escHtml(latestVersion)}`;
 
-  // Use escHtml for latestVersion (from API); downloadUrl is already validated above
-  textEl.innerHTML = `Update available: v${escHtml(latestVersion)} &mdash; `
-    + `<a href="${escHtml(downloadUrl)}" target="_blank">Download</a>, then go to `
-    + `<a href="chrome://extensions" target="_blank">chrome://extensions</a> and click the reload button.`;
+  // Wire up download button — points to ZIP if available, release page otherwise
+  const dlBtn = document.getElementById('updateDownloadBtn');
+  dlBtn.href = escHtml(zipUrl);
 
-  if (releaseNotes) {
-    notesEl.textContent = releaseNotes;
-    toggleBtn.style.display = 'inline-block';
-    toggleBtn.addEventListener('click', () => {
-      const open = notesEl.classList.toggle('open');
-      toggleBtn.textContent = open ? 'Release notes ▴' : 'Release notes ▾';
-    });
-  } else {
-    toggleBtn.style.display = 'none';
+  // If the URL is the release page (no ZIP asset), update button label
+  if (zipUrl === releasePageUrl) {
+    dlBtn.textContent = '↗ View release';
   }
 
-  banner.classList.add('visible');
+  // Release notes toggle
+  const notesWrap = document.getElementById('updateNotesWrap');
+  const notesEl   = document.getElementById('updateBannerNotes');
+  const toggleBtn = document.getElementById('updateNotesToggle');
+  if (releaseNotes) {
+    notesWrap.style.display = '';
+    notesEl.textContent = releaseNotes;
+    toggleBtn.addEventListener('click', () => {
+      const open = notesEl.classList.toggle('open');
+      toggleBtn.textContent = open ? "What's new ▴" : "What's new ▾";
+    });
+  }
+
+  // Dismiss button — stores the version so banner stays gone until next release
+  document.getElementById('updateDismissBtn').addEventListener('click', () => {
+    chrome.storage.local.set({ updateDismissed: latestVersion });
+    document.getElementById('updateBanner').classList.remove('visible');
+  });
+
+  document.getElementById('updateBanner').classList.add('visible');
 }
 
 checkForUpdate();

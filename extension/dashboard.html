@@ -445,38 +445,124 @@
     /* ── Update banner ── */
     #updateBanner {
       display: none;
-      margin: 0 24px 8px;
-      padding: 12px 16px;
-      background: rgba(74,158,255,0.08);
-      border: 1px solid rgba(74,158,255,0.35);
-      border-radius: 6px;
-      color: #4a9eff;
-      font-size: 13px;
-      line-height: 1.5;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
+      margin: 0 24px 12px;
+      background: #111827;
+      border: 1px solid rgba(74,158,255,0.4);
+      border-left: 4px solid #4a9eff;
+      border-radius: 8px;
+      overflow: hidden;
     }
-    #updateBanner.visible { display: flex; }
-    #updateBanner a { color: #4a9eff; font-weight: 600; }
-    #updateNotesToggle {
-      background: none;
-      border: 1px solid rgba(74,158,255,0.35);
-      border-radius: 4px;
-      color: #4a9eff;
-      font-size: 11px;
-      padding: 2px 8px;
-      cursor: pointer;
+    #updateBanner.visible { display: block; }
+
+    .update-banner-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px 12px;
+    }
+    .update-version-badge {
+      background: #4a9eff;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 20px;
+      white-space: nowrap;
       flex-shrink: 0;
     }
-    #updateNotesToggle:hover { background: rgba(74,158,255,0.08); }
+    .update-headline {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+    .update-dismiss-btn {
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 4px;
+      flex-shrink: 0;
+    }
+    .update-dismiss-btn:hover { color: #aaa; }
+
+    .update-steps {
+      padding: 0 16px 14px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .update-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      flex: 1;
+      min-width: 160px;
+    }
+    .update-step-num {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(74,158,255,0.15);
+      border: 1px solid rgba(74,158,255,0.35);
+      color: #4a9eff;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .update-step-text {
+      font-size: 13px;
+      color: #a0afc0;
+      line-height: 1.4;
+    }
+    .update-step-text strong { color: #e0e0e0; }
+
+    .update-download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #4a9eff;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+      margin-top: 2px;
+      transition: background 0.15s;
+    }
+    .update-download-btn:hover { background: #3a8eef; text-decoration: none; color: #fff; }
+
+    .update-notes-wrap {
+      border-top: 1px solid rgba(74,158,255,0.15);
+      padding: 0 16px;
+    }
+    #updateNotesToggle {
+      background: none;
+      border: none;
+      color: #4a9eff;
+      font-size: 12px;
+      padding: 8px 0;
+      cursor: pointer;
+      display: block;
+      width: 100%;
+      text-align: left;
+    }
+    #updateNotesToggle:hover { color: #7ab8ff; }
     #updateBannerNotes {
       display: none;
-      width: 100%;
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(74,158,255,0.2);
-      font-size: 11px;
+      padding-bottom: 12px;
+      font-size: 12px;
       color: #8a9bb0;
       white-space: pre-wrap;
       line-height: 1.6;
@@ -585,9 +671,35 @@
 <div id="status">Enter your USPSA member number (recommended) and/or name, then click Fetch Scores.</div>
 
 <div id="updateBanner">
-  <span id="updateBannerText"></span>
-  <button id="updateNotesToggle">Release notes ▾</button>
-  <div id="updateBannerNotes"></div>
+  <div class="update-banner-header">
+    <span class="update-version-badge" id="updateVersionBadge">v—</span>
+    <span class="update-headline">Update available — takes about 30 seconds to install</span>
+    <button class="update-dismiss-btn" id="updateDismissBtn" title="Dismiss">×</button>
+  </div>
+  <div class="update-steps">
+    <div class="update-step">
+      <div class="update-step-num">1</div>
+      <div class="update-step-text">
+        <a class="update-download-btn" id="updateDownloadBtn" href="#" target="_blank">⬇ Download update</a>
+      </div>
+    </div>
+    <div class="update-step">
+      <div class="update-step-num">2</div>
+      <div class="update-step-text">Unzip the downloaded file — you'll get a folder called <strong>extension</strong></div>
+    </div>
+    <div class="update-step">
+      <div class="update-step-num">3</div>
+      <div class="update-step-text">Go to <strong>chrome://extensions</strong> → click <strong>Load unpacked</strong> → select the <strong>extension</strong> folder</div>
+    </div>
+    <div class="update-step">
+      <div class="update-step-num">4</div>
+      <div class="update-step-text">Close this tab and reopen PScharts — you're on the latest version</div>
+    </div>
+  </div>
+  <div class="update-notes-wrap" id="updateNotesWrap" style="display:none">
+    <button id="updateNotesToggle">What's new ▾</button>
+    <div id="updateBannerNotes"></div>
+  </div>
 </div>
 
 <div id="psLoginWarning" class="login-warning">
