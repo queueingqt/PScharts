@@ -685,6 +685,14 @@ function renderAll() {
   // Division stat box — opens a dropdown
   const divStatBox = document.getElementById('statDiv').closest('.stat-box');
   const divStatVal = document.getElementById('statDiv');
+  // Tooltip on the label — explains the card and the click-to-filter behaviour
+  const divLblEl = divStatBox.querySelector('.lbl');
+  if (divLblEl) {
+    const divTipLines = divs.length > 1
+      ? `The division(s) detected in your match history.\nClick to filter all charts and stats to a single division.`
+      : `The division you shot in your match history.\nAll charts and stats reflect this division.`;
+    divLblEl.title = divTipLines;
+  }
   if (divs.length > 0) {
     divStatBox.classList.add('clickable');
     divStatBox.classList.toggle('active-filter', !!selectedDiv);
