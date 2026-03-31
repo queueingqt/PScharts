@@ -515,12 +515,7 @@ fetchBtn.addEventListener('click', async () => {
 
     renderAll();
     renderMatchList();
-
-    const uspsa  = allResults.filter(r => isLikelyUSPSA(r.match_type || 'Unknown')).length;
-    const nonUspsa = allResults.length - uspsa;
-    const scored = allResults.filter(r => r.overall_pct != null).length;
-    const skippedNote = nonUspsa > 0 ? ` · ${nonUspsa} non-USPSA match(es) excluded from charts` : '';
-    setStatus(`Loaded ${uspsa} USPSA match(es) — ${scored} with scores.${skippedNote}`, 'success');
+    updateStatusCounts('Loaded');
 
   } catch (err) {
     setStatus(`Error: ${err.message}`, 'error');
@@ -646,6 +641,17 @@ function renderAll() {
   document.getElementById('statBest').textContent    = best.toFixed(1) + '%';
   document.getElementById('statBest').style.color    = bestBand?.text.replace('0.55','1') || '#4a9eff';
 
+  // Stat box tooltips — explain what each metric measures
+  const divLabel = selectedDiv ? ` in ${selectedDiv}` : '';
+  document.getElementById('statAvgBox').dataset.tip =
+    `Your average match score${divLabel}.\n` +
+    `Calculated as your points ÷ the match winner's points × 100,\n` +
+    `averaged across all checked matches in the current view.`;
+  document.getElementById('statBestBox').dataset.tip =
+    `Your highest single-match score${divLabel}.\n` +
+    `Match score = your points ÷ match winner's points × 100.\n` +
+    `Color indicates the USPSA classification band for that score.`;
+
   // Division stat box — opens a dropdown
   const divStatBox = document.getElementById('statDiv').closest('.stat-box');
   const divStatVal = document.getElementById('statDiv');
@@ -748,6 +754,17 @@ function renderAll() {
     document.getElementById('statBest').textContent = clfBest.toFixed(1) + '%';
     document.getElementById('statBest').style.color = bestBandC?.text.replace('0.55','1') || '#4a9eff';
     if (avgLbl) avgLbl.textContent = avgBandC ? `Avg % · ${avgBandC.label} Class` : 'Avg %';
+
+    // Classifier-mode tooltips
+    const clfSource = officialPcts.length ? 'official USPSA % vs national HHF' : 'match % vs match top HF';
+    document.getElementById('statAvgBox').dataset.tip =
+      `Your average classifier score (${clfSource}),\n` +
+      `averaged across all classifier stages in the current view.\n` +
+      `USPSA uses your best 6 classifiers to set your classification.`;
+    document.getElementById('statBestBox').dataset.tip =
+      `Your highest single classifier score (${clfSource}).\n` +
+      `Color indicates the USPSA classification band for that score.\n` +
+      `GM = 95%+, M = 85–95%, A = 75–85%, B = 60–75%, C = 40–60%.`;
 
     // Build series grouped by division — gives continuous lines over time
     const DIV_PALETTE = ['#4a9eff','#4caf50','#ff9800','#e91e63','#9c27b0','#00bcd4','#ffeb3b','#ff5722'];
@@ -1122,6 +1139,7 @@ function renderMatchList() {
         saveDeselected();
         item.classList.toggle('excluded', !e.target.checked);
         renderAll();
+        updateStatusCounts();
       });
     }
 
@@ -1238,6 +1256,23 @@ async function refreshSingleMatch(match, btn) {
 function setStatus(msg, type = '', loading = false) {
   statusEl.className = type;
   statusEl.innerHTML = loading ? `<div class="spinner"></div>${msg}` : msg;
+}
+
+// Recompute and display the status line from current allResults + deselectedMatches.
+// verb = 'Loaded' on first fetch, omitted (defaults to 'Showing') on checkbox changes.
+function updateStatusCounts(verb) {
+  if (!allResults.length) return;
+  const uspsa    = allResults.filter(r => isLikelyUSPSA(r.match_type || 'Unknown')).length;
+  const nonUspsa = allResults.length - uspsa;
+  const checked  = allResults.filter(r =>
+    isLikelyUSPSA(r.match_type || 'Unknown') && !deselectedMatches.has(r.match_id)
+  ).length;
+  const scored   = allResults.filter(r => r.overall_pct != null).length;
+
+  const prefix      = verb || 'Showing';
+  const checkedNote = checked < uspsa ? ` · ${checked} checked` : '';
+  const skippedNote = nonUspsa > 0   ? ` · ${nonUspsa} non-USPSA excluded` : '';
+  setStatus(`${prefix} ${uspsa} USPSA match(es) — ${scored} with scores${checkedNote}.${skippedNote}`, 'success');
 }
 
 function parseDate(str) {

@@ -131,6 +131,31 @@
     .stat-box.clickable { cursor: pointer; user-select: none; }
     .stat-box.clickable:hover { border-color: #4a9eff; background: #1e2235; }
     .stat-box.active-filter { border-color: #4a9eff; }
+    /* Stat box tooltip — shown on hover when data-tip is set */
+    .stat-box[data-tip] { cursor: help; }
+    .stat-box[data-tip]:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1d27;
+      border: 1px solid #3a3d4a;
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 11px;
+      color: #ccc;
+      white-space: pre-line;
+      text-align: left;
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 400;
+      min-width: 200px;
+      max-width: 280px;
+      z-index: 300;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      pointer-events: none;
+    }
     .div-dropdown {
       position: absolute; top: calc(100% + 4px); left: 0;
       min-width: 100%; background: #1a1d27;
@@ -580,8 +605,8 @@
 <div class="summary-bar" id="summaryBar">
   <div id="stats">
     <div class="stat-box"><div class="val" id="statMatches">—</div><div class="lbl">Matches</div></div>
-    <div class="stat-box"><div class="val" id="statAvg">—</div><div class="lbl">Avg %</div></div>
-    <div class="stat-box"><div class="val" id="statBest">—</div><div class="lbl">Best %</div></div>
+    <div class="stat-box" id="statAvgBox"><div class="val" id="statAvg">—</div><div class="lbl" id="statAvgLbl">Avg %</div></div>
+    <div class="stat-box" id="statBestBox"><div class="val" id="statBest">—</div><div class="lbl" id="statBestLbl">Best %</div></div>
     <div class="stat-box"><div class="val" id="statDiv">—</div><div class="lbl">Division</div></div>
     <div class="stat-box" id="statClassBox" style="display:none"><div class="val" id="statClass">—</div><div class="lbl">Class</div></div>
   </div>
