@@ -1383,26 +1383,30 @@ function renderClassBox(viewSortedDivision) {
   if (!info?.class_) { box.style.display = 'none'; return; }
 
   const c = info.class_.toUpperCase();
-  const pctStr = info.pct != null ? `<span style="font-size:0.55em;color:#888;margin-left:4px">${info.pct.toFixed(1)}%</span>` : '';
-  val.innerHTML = `<span class="class-badge class-${c.toLowerCase()}">${c}</span>${pctStr}`;
 
-  // Label — show division name if known
-  const lbl = box.querySelector('.lbl');
-  if (lbl) lbl.textContent = 'USPSA Class';
+  // Three-line layout: class letter → percentage → "USPSA Class" label
+  // Rebuild inner HTML directly so we're not fighting the val/lbl two-slot structure
+  const bandColor = { GM:'#ffd700', M:'#e040fb', A:'#4caf50', B:'#4a9eff', C:'#ff9800', D:'#8a9bb0', U:'#666' }[c] || '#8a9bb0';
+  const pctLine   = info.pct != null
+    ? `<div style="font-size:14px;font-weight:600;color:#aaa;margin:2px 0 1px">${info.pct.toFixed(1)}%</div>`
+    : '';
+  box.innerHTML = `
+    <div style="font-size:26px;font-weight:700;color:${bandColor};line-height:1.1">${escHtml(c)}</div>
+    ${pctLine}
+    <div style="font-size:12px;color:#777;text-transform:uppercase;letter-spacing:0.5px;margin-top:2px">USPSA Class</div>
+  `;
 
   // Tooltip — explain what the class and % mean
   const divName = Object.keys(classificationData.divisions).find(k =>
     k.toLowerCase().includes((viewSortedDivision || '').toLowerCase().slice(0, 4)) ||
     (viewSortedDivision || '').toLowerCase().includes(k.toLowerCase().slice(0, 4))
   ) || viewSortedDivision || 'your division';
-  const classNames = { GM: 'Grand Master', M: 'Master', A: 'A-class', B: 'B-class', C: 'C-class', D: 'D-class', U: 'Unclassified' };
-  const className = classNames[c] || c;
-  const pctLine = info.pct != null
+  const tipPctLine = info.pct != null
     ? `${info.pct.toFixed(1)}% — your current classifier average.\n`
     : '';
   box.dataset.tip =
     `Your official USPSA classification in ${divName}.\n` +
-    `${pctLine}` +
+    `${tipPctLine}` +
     `Classification is set by your best 6 classifier scores.\n` +
     `GM ≥95% · M ≥85% · A ≥75% · B ≥60% · C ≥40% · D <40%`;
 
