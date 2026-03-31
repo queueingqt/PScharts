@@ -151,7 +151,11 @@ let classificationData = null;  // data from uspsa.org/classification/[memberNum
 let classifiersOnly  = false;   // when true, charts show only classifier stage scores
 
 const NON_USPSA_TYPES = new Set(['IDPA', 'IPSC', 'Steel Challenge', '3-Gun', 'PCSL', 'ICORE', 'SCSA']);
+// Confirmed USPSA types — only these count toward the USPSA match total in the status line.
+// 'Unknown' and 'Hit Factor' are unconfirmed and shown separately.
+const CONFIRMED_USPSA_TYPES = new Set(['USPSA', 'Hit Factor']);
 function isLikelyUSPSA(matchType) { return !NON_USPSA_TYPES.has(matchType); }
+function isConfirmedUSPSA(matchType) { return CONFIRMED_USPSA_TYPES.has(matchType); }
 
 function isChartable(r) {
   return isLikelyUSPSA(r.match_type || 'Unknown');
@@ -429,12 +433,14 @@ chrome.storage.local.get(['memberNumber', 'name', 'lastMatchList', 'matchCache',
       if (!d.memberNumber) switchView('all');
       renderAll();
       renderMatchList();
-      const uspsaRestored = restored.filter(r => isLikelyUSPSA(r.match_type || 'Unknown'));
-      const scored = uspsaRestored.filter(r => r.overall_pct != null).length;
-      const uspsa  = uspsaRestored.length;
-      const nonUspsa = restored.length - uspsa;
-      const skippedNote = nonUspsa > 0 ? ` · ${nonUspsa} non-USPSA excluded` : '';
-      setStatus(`Showing cached data — ${scored}/${uspsa} USPSA matches scored.${skippedNote} Click Fetch Scores to check for new matches.`, 'success');
+      const confirmedRestored  = restored.filter(r => isConfirmedUSPSA(r.match_type || 'Unknown'));
+      const unconfirmedRestored = restored.filter(r => isLikelyUSPSA(r.match_type || 'Unknown') && !isConfirmedUSPSA(r.match_type || 'Unknown'));
+      const nonUspsaRestored   = restored.filter(r => !isLikelyUSPSA(r.match_type || 'Unknown'));
+      const scored    = confirmedRestored.filter(r => r.overall_pct != null).length;
+      const uspsa     = confirmedRestored.length;
+      const unconfirmedNote = unconfirmedRestored.length > 0 ? ` · ${unconfirmedRestored.length} unconfirmed type` : '';
+      const skippedNote     = nonUspsaRestored.length > 0    ? ` · ${nonUspsaRestored.length} non-USPSA excluded` : '';
+      setStatus(`Showing cached data — ${scored}/${uspsa} USPSA matches scored.${unconfirmedNote}${skippedNote} Click Fetch Scores to check for new matches.`, 'success');
     }
   }
 });
@@ -1377,8 +1383,29 @@ function renderClassBox(viewSortedDivision) {
   if (!info?.class_) { box.style.display = 'none'; return; }
 
   const c = info.class_.toUpperCase();
-  const pctStr = info.pct != null ? `<span style="font-size:11px;color:#666">${info.pct.toFixed(1)}%</span>` : '';
-  val.innerHTML = `<span class="class-badge class-${c.toLowerCase()}">${c}</span> ${pctStr}`;
+  const pctStr = info.pct != null ? `<span style="font-size:0.55em;color:#888;margin-left:4px">${info.pct.toFixed(1)}%</span>` : '';
+  val.innerHTML = `<span class="class-badge class-${c.toLowerCase()}">${c}</span>${pctStr}`;
+
+  // Label — show division name if known
+  const lbl = box.querySelector('.lbl');
+  if (lbl) lbl.textContent = 'USPSA Class';
+
+  // Tooltip — explain what the class and % mean
+  const divName = Object.keys(classificationData.divisions).find(k =>
+    k.toLowerCase().includes((viewSortedDivision || '').toLowerCase().slice(0, 4)) ||
+    (viewSortedDivision || '').toLowerCase().includes(k.toLowerCase().slice(0, 4))
+  ) || viewSortedDivision || 'your division';
+  const classNames = { GM: 'Grand Master', M: 'Master', A: 'A-class', B: 'B-class', C: 'C-class', D: 'D-class', U: 'Unclassified' };
+  const className = classNames[c] || c;
+  const pctLine = info.pct != null
+    ? `${info.pct.toFixed(1)}% — your current classifier average.\n`
+    : '';
+  box.dataset.tip =
+    `Your official USPSA classification in ${divName}.\n` +
+    `${pctLine}` +
+    `Classification is set by your best 6 classifier scores.\n` +
+    `GM ≥95% · M ≥85% · A ≥75% · B ≥60% · C ≥40% · D <40%`;
+
   box.style.display = '';
 }
 
@@ -1460,16 +1487,18 @@ function setStatus(msg, type = '', loading = false) {
 // verb = 'Loaded' on first fetch, omitted (defaults to 'Showing') on checkbox changes.
 function updateStatusCounts(verb) {
   if (!allResults.length) return;
-  const uspsaMatches = allResults.filter(r => isLikelyUSPSA(r.match_type || 'Unknown'));
-  const nonUspsa = allResults.length - uspsaMatches.length;
-  const uspsa    = uspsaMatches.length;
-  const scored   = uspsaMatches.filter(r => r.overall_pct != null).length;
-  const checked  = uspsaMatches.filter(r => !deselectedMatches.has(r.match_id)).length;
+  const confirmedUSPSA  = allResults.filter(r => isConfirmedUSPSA(r.match_type || 'Unknown'));
+  const unconfirmed     = allResults.filter(r => isLikelyUSPSA(r.match_type || 'Unknown') && !isConfirmedUSPSA(r.match_type || 'Unknown'));
+  const nonUspsa        = allResults.filter(r => !isLikelyUSPSA(r.match_type || 'Unknown'));
+  const uspsa           = confirmedUSPSA.length;
+  const scored          = confirmedUSPSA.filter(r => r.overall_pct != null).length;
+  const checked         = confirmedUSPSA.filter(r => !deselectedMatches.has(r.match_id)).length;
 
-  const prefix      = verb || 'Showing';
-  const checkedNote = checked < uspsa ? ` · ${checked} checked` : '';
-  const skippedNote = nonUspsa > 0   ? ` · ${nonUspsa} non-USPSA excluded` : '';
-  setStatus(`${prefix} ${uspsa} USPSA match(es) — ${scored} with scores${checkedNote}.${skippedNote}`, 'success');
+  const prefix           = verb || 'Showing';
+  const checkedNote      = checked < uspsa ? ` · ${checked} checked` : '';
+  const unconfirmedNote  = unconfirmed.length > 0 ? ` · ${unconfirmed.length} unconfirmed type` : '';
+  const skippedNote      = nonUspsa.length > 0    ? ` · ${nonUspsa.length} non-USPSA excluded` : '';
+  setStatus(`${prefix} ${uspsa} USPSA match(es) — ${scored} with scores${checkedNote}.${unconfirmedNote}${skippedNote}`, 'success');
 }
 
 function parseDate(str) {
