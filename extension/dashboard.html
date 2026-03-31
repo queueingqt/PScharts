@@ -261,6 +261,10 @@
 
     canvas { display: block; width: 100% !important; }
 
+    /* ── Consistency stat — color-coded by variance level ── */
+    .consistency-good { color: #4caf50; }
+    .consistency-ok   { color: #fdd835; }
+    .consistency-poor { color: #ff9800; }
 
     /* ── Match history list ── */
     #matchHistory { display: none; margin: 24px 24px 0; }
@@ -724,6 +728,7 @@
     <div class="stat-box"><div class="val" id="statMatches">—</div><div class="lbl">Matches</div></div>
     <div class="stat-box" id="statAvgBox"><div class="val" id="statAvg">—</div><div class="lbl" id="statAvgLbl">Avg %</div></div>
     <div class="stat-box" id="statBestBox"><div class="val" id="statBest">—</div><div class="lbl" id="statBestLbl">Best %</div></div>
+    <div class="stat-box" id="statConsistencyBox" style="display:none"><div class="val" id="statConsistency">—</div><div class="lbl">Consistency</div></div>
     <div class="stat-box"><div class="val" id="statDiv">—</div><div class="lbl">Division</div></div>
     <div class="stat-box" id="statClassBox" style="display:none"><div class="val" id="statClass">—</div><div class="lbl">Class</div></div>
   </div>
@@ -750,7 +755,10 @@
     <canvas id="chartTime" height="220"></canvas>
   </div>
   <div class="chart-section" id="chartPlaceSection">
-    <h3>Placement Over Time</h3>
+    <div class="chart-section-header">
+      <h3>Placement Over Time</h3>
+      <span id="chartPlaceSubtitle" style="font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.5px"></span>
+    </div>
     <canvas id="chartPlace" height="180"></canvas>
   </div>
   <div class="chart-section" id="chartNonClfSection" style="display:none">
@@ -759,6 +767,27 @@
       <span style="font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.5px">Avg HF% across non-classifier stages per match</span>
     </div>
     <canvas id="chartNonClf" height="180"></canvas>
+  </div>
+  <div class="chart-section" id="chartClfOverlaySection" style="display:none">
+    <div class="chart-section-header">
+      <h3>Classifier vs Match Score</h3>
+      <span style="font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.5px">Are your classifier scores tracking your match performance?</span>
+    </div>
+    <canvas id="chartClfOverlay" height="200"></canvas>
+  </div>
+  <div class="chart-section" id="chartAccuracySection" style="display:none">
+    <div class="chart-section-header">
+      <h3>Accuracy Trend</h3>
+      <span style="font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.5px">Miss + No-shoot rate per match — lower is better</span>
+    </div>
+    <canvas id="chartAccuracy" height="180"></canvas>
+  </div>
+  <div class="chart-section" id="chartHitZoneSection" style="display:none">
+    <div class="chart-section-header">
+      <h3>Hit Zone Breakdown</h3>
+      <span style="font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.5px">A / C / D / M+NS distribution per match</span>
+    </div>
+    <canvas id="chartHitZone" height="200"></canvas>
   </div>
 </div>
 

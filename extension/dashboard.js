@@ -682,6 +682,29 @@ function renderAll() {
     `Match score = your points ÷ match winner's points × 100.\n` +
     `Color indicates the USPSA classification band for that score.`;
 
+  // ── Consistency stat card ─────────────────────────────────────────────────
+  // Standard deviation of match %. Low stddev = consistent performer.
+  // Only shown when ≥3 matches (stddev is meaningless on 1-2 points).
+  const consistencyBox = document.getElementById('statConsistencyBox');
+  const consistencyVal = document.getElementById('statConsistency');
+  const pcts = viewSorted.map(r => r.overall_pct).filter(v => v != null);
+  if (pcts.length >= 3) {
+    const mean   = pcts.reduce((s, v) => s + v, 0) / pcts.length;
+    const stddev = Math.sqrt(pcts.reduce((s, v) => s + (v - mean) ** 2, 0) / pcts.length);
+    const cls    = stddev < 5 ? 'consistency-good' : stddev < 10 ? 'consistency-ok' : 'consistency-poor';
+    const label  = stddev < 5 ? 'Consistent' : stddev < 10 ? 'Variable' : 'Inconsistent';
+    consistencyVal.className = `val ${cls}`;
+    consistencyVal.textContent = `±${stddev.toFixed(1)}%`;
+    consistencyBox.dataset.tip =
+      `How consistent your scores are across matches.\n` +
+      `±${stddev.toFixed(1)}% std deviation — ${label}.\n` +
+      `< ±5% = consistent, ±5–10% = variable, > ±10% = inconsistent.\n` +
+      `High variance means performance swings match-to-match.`;
+    consistencyBox.style.display = '';
+  } else {
+    consistencyBox.style.display = 'none';
+  }
+
   // Division stat box — opens a dropdown
   const divStatBox = document.getElementById('statDiv').closest('.stat-box');
   const divStatVal = document.getElementById('statDiv');
@@ -825,9 +848,9 @@ function renderAll() {
       showClassBands: true,
     });
     setPlacementVisible(false);
-    // Hide non-classifier trend in classifiers-only mode
-    const nonClfSectionClf = document.getElementById('chartNonClfSection');
-    if (nonClfSectionClf) nonClfSectionClf.style.display = 'none';
+    // Hide analysis charts in classifiers-only mode
+    ['chartNonClfSection','chartClfOverlaySection','chartAccuracySection','chartHitZoneSection']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
     return;
   }
 
@@ -913,6 +936,15 @@ function renderAll() {
 
   if (placeSeries.length > 0) {
     const allPlaceDates = [...new Set(placeSeries.flatMap(s => s.points.map(p => p.date)))].sort();
+    // Field size context — show min/max competitor count as subtitle
+    const allTotals = placeSeries.flatMap(s => s.points.map(p => p.total)).filter(v => v != null && v > 0);
+    const placeSubEl = document.getElementById('chartPlaceSubtitle');
+    if (placeSubEl && allTotals.length) {
+      const minT = Math.min(...allTotals), maxT = Math.max(...allTotals);
+      placeSubEl.textContent = minT === maxT
+        ? `Field size: ${minT} competitors`
+        : `Field size: ${minT}–${maxT} competitors across matches`;
+    }
     drawMultiSeriesChart(document.getElementById('chartPlace'), placeSeries, allPlaceDates, {
       yLabel: 'Field beaten %', yMin: 0, yMax: 100, invertY: false, valueUnit: 'place%',
     });
@@ -955,6 +987,130 @@ function renderAll() {
     });
   } else {
     nonClfSection.style.display = 'none';
+  }
+
+  // ── Classifier vs Match overlay ───────────────────────────────────────────
+  // Overlays per-match score (blue) with classifier scores (gold) on one chart.
+  // Shows whether classifier performance tracks match performance.
+  // Only rendered when both series have ≥2 points.
+  const clfOverlaySection = document.getElementById('chartClfOverlaySection');
+  const matchScorePoints  = viewSorted
+    .filter(r => r.overall_pct != null)
+    .map(r => ({ date: r.date, y: r.overall_pct, label: r.match_name, division: r.division, class_: r.class_ }));
+
+  const clfOverlayPoints = [];
+  for (const r of viewSorted) {
+    if (!r.stages) continue;
+    for (const s of r.stages) {
+      const clf = isClassifierStage(s);
+      if (!clf) continue;
+      const pct = s.clf_pct ?? s.pct;
+      if (pct == null) continue;
+      clfOverlayPoints.push({
+        date: r.date,
+        y: pct,
+        label: clf.number ? `CM ${clf.number}${clf.name ? ' · ' + clf.name : ''}` : 'Classifier',
+        match_name: r.match_name,
+        isOfficial: s.clf_pct != null,
+      });
+    }
+  }
+  clfOverlayPoints.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  if (matchScorePoints.length >= 2 && clfOverlayPoints.length >= 2) {
+    clfOverlaySection.style.display = '';
+    const allOverlayDates = [...new Set([
+      ...matchScorePoints.map(p => p.date),
+      ...clfOverlayPoints.map(p => p.date),
+    ])].sort();
+    const overlaySeries = [
+      { label: 'Match %',      color: '#4a9eff', points: matchScorePoints },
+      { label: 'Classifier %', color: '#ffd700', points: clfOverlayPoints },
+    ];
+    drawMultiSeriesChart(document.getElementById('chartClfOverlay'), overlaySeries, allOverlayDates, {
+      yLabel: '%', yMin: 0, yMax: 100, invertY: false, trend: false, valueUnit: '%',
+      showClassBands: true,
+    });
+  } else {
+    clfOverlaySection.style.display = 'none';
+  }
+
+  // ── Accuracy trend ────────────────────────────────────────────────────────
+  // Plots (M + NS) count per match over time. Requires stage hit data.
+  // Lower = better accuracy. Trend line shows direction.
+  const accuracySection = document.getElementById('chartAccuracySection');
+  const accuracyPoints  = [];
+  for (const r of viewSorted) {
+    if (!r.stages?.length) continue;
+    let totalM = 0, totalNS = 0, stagesWithHits = 0;
+    for (const s of r.stages) {
+      if (s.m == null && s.ns == null) continue;
+      totalM  += s.m  || 0;
+      totalNS += s.ns || 0;
+      stagesWithHits++;
+    }
+    if (!stagesWithHits) continue;
+    accuracyPoints.push({
+      date: r.date,
+      y: totalM + totalNS,
+      label: r.match_name,
+      division: r.division,
+      m: totalM,
+      ns: totalNS,
+    });
+  }
+  accuracyPoints.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  if (accuracyPoints.length >= 2) {
+    accuracySection.style.display = '';
+    const accSeries = [{ label: 'M + NS', color: '#f44336', points: accuracyPoints }];
+    const accDates  = accuracyPoints.map(p => p.date);
+    drawMultiSeriesChart(document.getElementById('chartAccuracy'), accSeries, accDates, {
+      yLabel: 'M + NS', yMin: 0, yMax: null, invertY: false, trend: true, valueUnit: 'hits',
+      showClassBands: false,
+    });
+  } else {
+    accuracySection.style.display = 'none';
+  }
+
+  // ── Hit zone breakdown ────────────────────────────────────────────────────
+  // Stacked bar chart: A / C / D / M+NS per match as % of total hits.
+  // Shows whether the shooter is cleaning up hit zones over time.
+  const hitZoneSection = document.getElementById('chartHitZoneSection');
+  const hitZoneBars    = [];
+  for (const r of viewSorted) {
+    if (!r.stages?.length) continue;
+    let a = 0, c = 0, d = 0, m = 0, ns = 0;
+    let hasHits = false;
+    for (const s of r.stages) {
+      if (s.a == null && s.c == null) continue;
+      a  += s.a  || 0;
+      c  += s.c  || 0;
+      d  += s.d  || 0;
+      m  += s.m  || 0;
+      ns += s.ns || 0;
+      hasHits = true;
+    }
+    if (!hasHits) continue;
+    const total = a + c + d + m + ns;
+    if (!total) continue;
+    hitZoneBars.push({
+      date: r.date,
+      label: r.match_name,
+      a, c, d, bad: m + ns, total,
+      aPct:   (a / total) * 100,
+      cPct:   (c / total) * 100,
+      dPct:   (d / total) * 100,
+      badPct: ((m + ns) / total) * 100,
+    });
+  }
+  hitZoneBars.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  if (hitZoneBars.length >= 2) {
+    hitZoneSection.style.display = '';
+    drawStackedBarChart(document.getElementById('chartHitZone'), hitZoneBars);
+  } else {
+    hitZoneSection.style.display = 'none';
   }
 
 }
@@ -1750,4 +1906,119 @@ function drawMessage(canvas, msg) {
   clearCanvas(ctx, canvas);
   ctx.fillStyle = '#444'; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
   ctx.fillText(msg, canvas.width / 2, canvas.height / 2);
+}
+
+// ── Stacked bar chart — hit zone breakdown ────────────────────────────────────
+// bars: [{ date, label, aPct, cPct, dPct, badPct, a, c, d, bad, total }]
+// Segments: A (green) / C (yellow) / D (orange) / M+NS (red)
+function drawStackedBarChart(canvas, bars) {
+  if (!bars.length) { drawMessage(canvas, 'No data.'); return; }
+
+  const ctx  = canvas.getContext('2d');
+  const area = chartArea(canvas);
+  clearCanvas(ctx, canvas);
+
+  const COLORS = {
+    a:   '#4caf50',
+    c:   '#fdd835',
+    d:   '#ff9800',
+    bad: '#f44336',
+  };
+  const SEGMENTS = ['a', 'c', 'd', 'bad'];
+  const SEG_LABELS = { a: 'A', c: 'C', d: 'D', bad: 'M+NS' };
+
+  const n       = bars.length;
+  const barW    = Math.max(4, Math.min(40, (area.w / n) * 0.7));
+  const gap     = area.w / n;
+  const hitMap  = [];
+
+  bars.forEach((bar, i) => {
+    const cx = area.x0 + gap * i + gap / 2;
+    let yBottom = area.y0 + area.h;
+
+    SEGMENTS.forEach(seg => {
+      const pct = bar[seg + 'Pct'];
+      if (!pct) return;
+      const segH = (pct / 100) * area.h;
+      const yTop = yBottom - segH;
+      ctx.fillStyle = COLORS[seg];
+      ctx.fillRect(cx - barW / 2, yTop, barW, segH);
+      yBottom = yTop;
+    });
+
+    hitMap.push({ cx, cy: area.y0 + area.h / 2, bar });
+
+    // X label
+    if (n <= 12 || i % Math.ceil(n / 8) === 0 || i === n - 1) {
+      ctx.fillStyle = TEXT_COLOR;
+      ctx.font = FONT;
+      ctx.textAlign = 'center';
+      ctx.fillText(bar.date ? bar.date.substring(5) : `#${i + 1}`, cx, area.y0 + area.h + 14);
+    }
+  });
+
+  // Y axis — 0/25/50/75/100%
+  ctx.strokeStyle = GRID_COLOR; ctx.lineWidth = 1;
+  [0, 25, 50, 75, 100].forEach(v => {
+    const cy = area.y0 + area.h - (v / 100) * area.h;
+    ctx.beginPath(); ctx.moveTo(area.x0, cy); ctx.lineTo(area.x0 + area.w, cy); ctx.stroke();
+    ctx.fillStyle = TEXT_COLOR; ctx.font = FONT; ctx.textAlign = 'right';
+    ctx.fillText(v + '%', area.x0 - 5, cy + 3);
+  });
+
+  // Axes
+  ctx.strokeStyle = AXIS_COLOR; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(area.x0, area.y0);
+  ctx.lineTo(area.x0, area.y0 + area.h);
+  ctx.lineTo(area.x0 + area.w, area.y0 + area.h);
+  ctx.stroke();
+
+  // Legend
+  let lx = area.x0 + 8;
+  const ly = area.y0 + area.h + 30;
+  SEGMENTS.forEach(seg => {
+    ctx.fillStyle = COLORS[seg];
+    ctx.fillRect(lx, ly - 7, 10, 8);
+    ctx.fillStyle = TEXT_COLOR; ctx.font = FONT; ctx.textAlign = 'left';
+    ctx.fillText(SEG_LABELS[seg], lx + 14, ly);
+    lx += 14 + ctx.measureText(SEG_LABELS[seg]).width + 14;
+  });
+
+  // Tooltip
+  canvas._hitMap    = hitMap;
+  canvas._valueUnit = 'hitzones';
+  if (!canvas._tooltipBound) {
+    canvas._tooltipBound = true;
+    canvas.addEventListener('mousemove', e => {
+      const r  = canvas.getBoundingClientRect();
+      const mx = (e.clientX - r.left) * (canvas.width  / r.width);
+      const h  = (canvas._hitMap || []).find(h => Math.abs(h.cx - mx) < (area.w / bars.length) / 2);
+      if (h) {
+        const b = h.bar;
+        tooltipEl.innerHTML = `
+          <div class="tt-name">${escHtml(b.label)}</div>
+          <div class="tt-date">${escHtml(b.date || '')}</div>
+          <div class="tt-meta" style="margin-top:4px">
+            <span style="color:#4caf50">${b.a}A (${b.aPct.toFixed(0)}%)</span> &nbsp;
+            <span style="color:#fdd835">${b.c}C (${b.cPct.toFixed(0)}%)</span> &nbsp;
+            <span style="color:#ff9800">${b.d}D (${b.dPct.toFixed(0)}%)</span> &nbsp;
+            <span style="color:#f44336;font-weight:600">${b.bad} M+NS (${b.badPct.toFixed(0)}%)</span>
+          </div>
+          <div class="tt-meta" style="color:#666">${b.total} total hits</div>
+        `;
+        const tw = 280, th = 110;
+        const tx = e.clientX + 14 + tw > window.innerWidth  ? e.clientX - tw - 8 : e.clientX + 14;
+        const ty = e.clientY - 10 + th > window.innerHeight ? e.clientY - th      : e.clientY - 10;
+        tooltipEl.style.left    = tx + 'px';
+        tooltipEl.style.top     = ty + 'px';
+        tooltipEl.style.display = 'block';
+        canvas.style.cursor = 'crosshair';
+      } else {
+        tooltipEl.style.display = 'none';
+        canvas.style.cursor = '';
+      }
+    });
+    canvas.addEventListener('mouseleave', () => { tooltipEl.style.display = 'none'; });
+  }
 }
