@@ -935,7 +935,7 @@ function renderMatchList() {
               <td>${badge}${s.name}</td>
               <td>${s.time != null ? s.time.toFixed(2) + 's' : '—'}</td>
               <td>${s.hf   != null ? s.hf.toFixed(4)         : '—'}</td>
-              <td>${fmtPct(s.pct)}</td>
+              <td>${clf && s.clf_pct != null ? `${fmtPct(s.clf_pct)}<br><small style="opacity:0.6" title="Match %">match: ${s.pct != null ? s.pct.toFixed(1) + '%' : '—'}</small>` : fmtPct(s.pct)}</td>
               <td class="col-a">${s.a}</td>
               <td class="col-c">${s.c}</td>
               <td class="col-d">${s.d}</td>
@@ -1022,8 +1022,10 @@ function renderClassBox(viewSortedDivision) {
   if (!info?.class_) { box.style.display = 'none'; return; }
 
   const c = info.class_.toUpperCase();
-  const pctStr = info.pct != null ? `<span style="font-size:11px;color:#666">${info.pct.toFixed(1)}%</span>` : '';
-  val.innerHTML = `<span class="class-badge class-${c.toLowerCase()}">${c}</span> ${pctStr}`;
+  const COLOR = { GM: '#ffd700', M: '#e040fb', A: '#4caf50', B: '#4a9eff', C: '#ff9800', D: '#8a9bb0', U: '#666' };
+  const color = COLOR[c] || '#8a9bb0';
+  const pctStr = info.pct != null ? `<div style="font-size:10px;color:#666;margin-top:1px">${info.pct.toFixed(1)}%</div>` : '';
+  val.innerHTML = `<span style="font-size:38px;font-weight:800;color:${color};line-height:1">${c}</span>${pctStr}`;
   box.style.display = '';
 }
 
@@ -1083,6 +1085,7 @@ async function refreshSingleMatch(match, btn) {
     const { result } = response.data;
     const idx = allResults.findIndex(r => r.match_id === match.match_id);
     if (idx >= 0) allResults[idx] = { ...allResults[idx], ...result };
+    allResults = crossReferenceClassifiers(allResults, classificationData);
 
     renderAll();
     renderMatchList();
