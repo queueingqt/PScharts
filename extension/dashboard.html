@@ -152,6 +152,27 @@
     .time-btn:hover { border-color: #4a9eff; color: #ccc; }
     .time-btn.active { background: #1e3a5f; border-color: #4a9eff; color: #4a9eff; }
 
+    .date-range-form {
+      padding: 8px 14px 12px;
+      border-top: 1px solid #2a2d3a;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .date-range-form label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.4px; }
+    .date-range-form input[type="date"] {
+      background: #131620; border: 1px solid #2a2d3a; border-radius: 4px;
+      color: #ccc; font-size: 12px; padding: 4px 8px; width: 100%;
+      color-scheme: dark;
+    }
+    .date-range-form input[type="date"]:focus { outline: none; border-color: #4a9eff; }
+    .date-range-form .dr-apply {
+      margin-top: 4px; padding: 5px 12px; align-self: flex-end;
+      border-radius: 4px; border: 1px solid #4a9eff;
+      background: none; color: #4a9eff; font-size: 12px; cursor: pointer;
+    }
+    .date-range-form .dr-apply:hover { background: #1e3a5f; }
+
     #viewToggle { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
     .view-btn {
       padding: 7px 14px;
@@ -179,6 +200,18 @@
       justify-content: space-between;
       margin-bottom: 12px;
     }
+    #exportCsvBtn {
+      margin-left: auto;
+      margin-right: 12px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid #2a2d3a;
+      background: none;
+      color: #555;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    #exportCsvBtn:hover { color: #4caf50; border-color: #4caf50; }
     .chart-section h3 {
       font-size: 11px;
       font-weight: 600;
@@ -279,7 +312,7 @@
     .match-score { font-size: 13px; font-weight: 600; color: #4a9eff; white-space: nowrap; flex-shrink: 0; }
     .match-score.none { color: #444; font-weight: 400; font-size: 12px; }
 
-    .refresh-btn, .expand-btn {
+    .refresh-btn {
       padding: 4px 8px;
       border-radius: 4px;
       border: 1px solid #2a2d3a;
@@ -290,10 +323,82 @@
       cursor: pointer;
       flex-shrink: 0;
     }
-    .expand-btn { font-size: 11px; }
-    .refresh-btn:hover, .expand-btn:hover { color: #4a9eff; border-color: #4a9eff; }
+    .refresh-btn:hover { color: #4a9eff; border-color: #4a9eff; }
     .refresh-btn:disabled { opacity: 0.3; cursor: default; }
     .refresh-btn.spinning { display: inline-block; animation: spin 0.8s linear infinite; }
+
+    .expand-btn {
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      padding: 4px 2px;
+    }
+    .expand-btn:hover { color: #4a9eff; }
+    .expand-placeholder { width: 20px; flex-shrink: 0; display: inline-block; }
+
+    .export-btn {
+      padding: 3px 6px;
+      border-radius: 4px;
+      border: 1px solid #2a2d3a;
+      background: none;
+      color: #555;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+    }
+    .export-btn:hover { color: #4caf50; border-color: #4caf50; }
+
+    .stage-export-btn {
+      padding: 2px 4px;
+      border-radius: 3px;
+      border: 1px solid #2a2d3a;
+      background: none;
+      color: #444;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+    }
+    .stage-export-btn:hover { color: #4caf50; border-color: #4caf50; }
+
+    /* ── Export menu ── */
+    #exportMenu {
+      position: fixed;
+      display: none;
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 6px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+      z-index: 2000;
+      min-width: 210px;
+      overflow: hidden;
+    }
+    .export-menu-title {
+      padding: 6px 14px;
+      font-size: 10px;
+      color: #444;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #1e2130;
+    }
+    .export-menu-item {
+      padding: 8px 14px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #ccc;
+      border-bottom: 1px solid #1a1d27;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .export-menu-item:last-child { border-bottom: none; }
+    .export-menu-item:hover { background: #1e2235; color: #4caf50; }
 
     /* ── Stage panel ── */
     .match-item { margin-bottom: 6px; }
@@ -314,7 +419,7 @@
       width: 100%;
       border-collapse: collapse;
       font-size: 11px;
-      min-width: 480px;
+      min-width: 510px;
     }
     .stage-table th {
       padding: 6px 10px;
@@ -597,6 +702,7 @@
   <div class="chart-section">
     <div class="chart-section-header">
       <h3 id="chartTimeTitle">Score Over Time</h3>
+      <button id="exportCsvBtn" title="Export chart data as CSV">⤓ CSV</button>
       <label id="classifiersToggleWrap">
         <span class="toggle-lbl">Classifiers Only</span>
         <span class="toggle-switch">
@@ -621,6 +727,8 @@
 <div id="debugLog"></div>
 
 </div>
+
+<div id="exportMenu"></div>
 <div id="tooltip"></div>
 <script src="dashboard.js"></script>
 </body>

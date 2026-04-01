@@ -101,7 +101,8 @@ let allResults       = [];
 let currentView      = 'ranked'; // 'ranked' | 'all'
 let deselectedMatches = new Set(); // match IDs manually excluded from charts
 let selectedDiv      = null;     // division filter for stats + charts (null = All)
-let selectedYear     = null;     // year filter for charts (null = All Time)
+let selectedYear      = null;     // year filter for charts (null = All Time)
+let selectedDateRange = null;    // custom range { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } or null
 let classificationData = null;  // data from uspsa.org/classification/[memberNumber]
 let classifiersOnly  = false;   // when true, charts show only classifier stage scores
 
@@ -231,6 +232,13 @@ const USPSA_CLASSIFIERS = new Map([
   ['25-08', 'We Lost Hero or Zero'],
   ['25-09', 'Descent Into Madness'],
 ]);
+
+// Strips leading "Stage N" / "Stage N:" / "Stage N -" prefix from cached stage names.
+// PractiScore sometimes includes the prefix in the option text; background.js now strips
+// it on fresh fetches but cached data may still carry it.
+function normalizeStgName(name) {
+  return (name || '').replace(/^stage\s*\d+\s*[:\-–]?\s*/i, '').trim() || name || '';
+}
 
 // Returns { number, name } if the stage is a known classifier, or null if not.
 // Checks stored match_def fields first (authoritative), then falls back to name pattern matching.
@@ -516,40 +524,84 @@ fetchBtn.addEventListener('click', async () => {
   }
 });
 
-// ── Year filter pills ─────────────────────────────────────────────────────────
+// ── Year / date-range filter pill ────────────────────────────────────────────
 function renderYearFilter(years) {
   const el = document.getElementById('timeFilter');
   el.innerHTML = '';
   if (years.length === 0) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
 
+  const isCustom = !!selectedDateRange;
+  const label    = isCustom
+    ? `${selectedDateRange.start} – ${selectedDateRange.end}`
+    : selectedYear || 'All Time';
+
   const pill = document.createElement('button');
-  pill.className = 'time-btn' + (selectedYear ? ' active' : '');
-  pill.textContent = selectedYear || 'All Time';
+  pill.className = 'time-btn' + (selectedYear || isCustom ? ' active' : '');
+  pill.textContent = label;
+
   pill.onclick = (e) => {
     e.stopPropagation();
     const existing = el.querySelector('.div-dropdown');
     if (existing) { existing.remove(); return; }
+
     const dropdown = document.createElement('div');
     dropdown.className = 'div-dropdown';
+
+    // Standard year options
     ['All Time', ...years].forEach(y => {
       const item = document.createElement('div');
-      item.className = 'div-dropdown-item' + ((y === 'All Time' && !selectedYear) || y === selectedYear ? ' selected' : '');
+      item.className = 'div-dropdown-item' +
+        ((y === 'All Time' && !selectedYear && !isCustom) || y === selectedYear ? ' selected' : '');
       item.textContent = y;
       item.onclick = (ev) => {
         ev.stopPropagation();
         selectedYear = y === 'All Time' ? null : y;
+        selectedDateRange = null;
         dropdown.remove();
         renderAll();
       };
       dropdown.appendChild(item);
     });
+
+    // Custom range entry
+    const customItem = document.createElement('div');
+    customItem.className = 'div-dropdown-item' + (isCustom ? ' selected' : '');
+    customItem.textContent = 'Custom Range…';
+    customItem.onclick = (ev) => {
+      ev.stopPropagation();
+      if (dropdown.querySelector('.date-range-form')) return;
+      const form = document.createElement('div');
+      form.className = 'date-range-form';
+      form.innerHTML = `
+        <label>From</label>
+        <input type="date" class="dr-from" value="${selectedDateRange?.start || ''}">
+        <label>To</label>
+        <input type="date" class="dr-to"   value="${selectedDateRange?.end   || ''}">
+        <button class="dr-apply">Apply</button>
+      `;
+      form.addEventListener('click', ev2 => ev2.stopPropagation());
+      form.querySelector('.dr-apply').onclick = () => {
+        const start = form.querySelector('.dr-from').value;
+        const end   = form.querySelector('.dr-to').value;
+        if (start && end && start <= end) {
+          selectedDateRange = { start, end };
+          selectedYear = null;
+          dropdown.remove();
+          renderAll();
+        }
+      };
+      dropdown.appendChild(form);
+    };
+    dropdown.appendChild(customItem);
+
     el.appendChild(dropdown);
     setTimeout(() => document.addEventListener('click', function close() {
       dropdown.remove();
       document.removeEventListener('click', close);
     }, { once: true }), 0);
   };
+
   el.appendChild(pill);
 }
 
@@ -613,10 +665,11 @@ function renderAll() {
   const years = [...new Set(sorted.map(r => r.date?.slice(0, 4)).filter(Boolean))].sort();
   if (selectedYear && !years.includes(selectedYear)) selectedYear = null;
 
-  // Filter to selected division + year for stats + charts
+  // Filter to selected division + year/range for stats + charts
   const viewSorted = sorted.filter(r =>
-    (!selectedDiv || (r.division || 'Unknown') === selectedDiv) &&
-    (!selectedYear || r.date?.startsWith(selectedYear))
+    (!selectedDiv       || (r.division || 'Unknown') === selectedDiv) &&
+    (!selectedYear      || r.date?.startsWith(selectedYear)) &&
+    (!selectedDateRange || (r.date >= selectedDateRange.start && r.date <= selectedDateRange.end))
   );
 
   const avg  = viewSorted.reduce((s, r) => s + (r.overall_pct ?? 0), 0) / (viewSorted.length || 1);
@@ -894,8 +947,9 @@ function renderMatchList() {
     row.dataset.matchId = match.match_id;
     row.innerHTML = `
       <input type="checkbox" class="match-include-cb" title="Include in charts"
-        ${isDeselected ? '' : 'checked'}
+        ${(isUSPSA && !isDeselected) ? 'checked' : ''}
         ${!isUSPSA ? 'disabled' : ''}>
+      ${hasStages ? '<button class="expand-btn" title="Show stage breakdown">▶</button>' : '<span class="expand-placeholder"></span>'}
       <div class="match-dot ${dotClass}"></div>
       <div class="match-info">
         <div class="match-name">${match.match_name}</div>
@@ -903,8 +957,8 @@ function renderMatchList() {
       </div>
       <span class="match-type-badge ${typeBadgeClass}">${matchType}</span>
       <div class="match-score ${scoreText ? '' : 'none'}">${scoreText || 'No score'}</div>
-      ${hasStages ? '<button class="expand-btn" title="Show stage breakdown">▼</button>' : ''}
       <button class="refresh-btn" title="Re-fetch this match">↻</button>
+      <button class="export-btn" title="Save as image">${SAVE_ICON}</button>
       <button class="delete-btn" title="Delete from history">✕</button>
     `;
 
@@ -932,7 +986,7 @@ function renderMatchList() {
                 ? `<a class="classifier-badge" href="https://uspsa.org/viewer/${clf.number}.pdf" target="_blank" title="${clf.name ? clf.name + ' — ' : ''}CM ${clf.number} · View stage description">CM ${clf.number}</a>`
                 : '';
               return `<tr>
-              <td>${badge}${s.name}</td>
+              <td>${badge}${normalizeStgName(s.name)}</td>
               <td>${s.time != null ? s.time.toFixed(2) + 's' : '—'}</td>
               <td>${s.hf   != null ? s.hf.toFixed(4)         : '—'}</td>
               <td>${clf && s.clf_pct != null ? `${fmtPct(s.clf_pct)}<br><small style="opacity:0.6" title="Match %">match: ${s.pct != null ? s.pct.toFixed(1) + '%' : '—'}</small>` : fmtPct(s.pct)}</td>
@@ -951,12 +1005,12 @@ function renderMatchList() {
       const toggleExpand = () => {
         const isOpen = panel.classList.toggle('open');
         item.classList.toggle('open', isOpen);
-        row.querySelector('.expand-btn').textContent = isOpen ? '▲' : '▼';
+        row.querySelector('.expand-btn').textContent = isOpen ? '▼' : '▶';
       };
 
       row.style.cursor = 'pointer';
       row.addEventListener('click', e => {
-        if (e.target.closest('.refresh-btn, .delete-btn, .match-include-cb, .classifier-badge')) return;
+        if (e.target.closest('.refresh-btn, .delete-btn, .export-btn, .match-include-cb, .classifier-badge')) return;
         toggleExpand();
       });
       row.querySelector('.expand-btn').addEventListener('click', e => {
@@ -989,6 +1043,17 @@ function renderMatchList() {
     row.querySelector('.refresh-btn').addEventListener('click', e => {
       e.stopPropagation();
       refreshSingleMatch(match, row.querySelector('.refresh-btn'));
+    });
+
+    // Export button → show menu
+    row.querySelector('.export-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      if (_exportMenuMatch === match && _exportMenuEl.style.display !== 'none') {
+        _exportMenuEl.style.display = 'none';
+        _exportMenuMatch = null;
+      } else {
+        showExportMenu(match, e.currentTarget);
+      }
     });
 
     // Delete button
@@ -1065,6 +1130,447 @@ async function deleteMatch(match) {
     setStatus(`${allResults.length} match(es) — ${scored} with scores.`, 'success');
   }
 }
+
+// ── Save icon SVG (floppy disk, feather-style) ────────────────────────────────
+const SAVE_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`;
+
+// ── Export menu ───────────────────────────────────────────────────────────────
+let _exportMenuMatch = null;
+const _exportMenuEl  = document.getElementById('exportMenu');
+
+function showExportMenu(match, anchorEl) {
+  _exportMenuMatch = match;
+  const stages = match.stages || [];
+  _exportMenuEl.innerHTML = `
+    <div class="export-menu-title">Save as Image</div>
+    <div class="export-menu-item" data-action="match">Full Match</div>
+    ${stages.map((s, i) => {
+      const nm = normalizeStgName(s.name);
+      return `<div class="export-menu-item" data-action="stage" data-idx="${i}">Stage ${i + 1}: ${nm.length > 32 ? nm.slice(0, 30) + '…' : nm}</div>`;
+    }).join('')}
+  `;
+  _exportMenuEl.style.display = 'block';
+  const r = anchorEl.getBoundingClientRect();
+  const mh = _exportMenuEl.offsetHeight;
+  const top = r.bottom + mh + 4 > window.innerHeight ? r.top - mh - 4 : r.bottom + 4;
+  _exportMenuEl.style.top  = top + 'px';
+  _exportMenuEl.style.left = Math.min(r.left, window.innerWidth - 220) + 'px';
+}
+
+_exportMenuEl.addEventListener('click', e => {
+  const item = e.target.closest('.export-menu-item');
+  if (!item || !_exportMenuMatch) return;
+  _exportMenuEl.style.display = 'none';
+  if (item.dataset.action === 'match') {
+    exportMatchCard(_exportMenuMatch);
+  } else {
+    exportStageCard(_exportMenuMatch, _exportMenuMatch.stages[+item.dataset.idx]);
+  }
+  _exportMenuMatch = null;
+});
+
+document.addEventListener('click', e => {
+  if (_exportMenuEl.style.display !== 'none' && !_exportMenuEl.contains(e.target)
+      && !e.target.closest('.export-btn')) {
+    _exportMenuEl.style.display = 'none';
+    _exportMenuMatch = null;
+  }
+});
+
+// ── Export card helpers ───────────────────────────────────────────────────────
+function _rrPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function _wrapText(ctx, text, maxWidth) {
+  const words = (text || '').split(' ');
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const test = line ? line + ' ' + word : word;
+    if (line && ctx.measureText(test).width > maxWidth) { lines.push(line); line = word; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
+}
+
+function _trunc(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 0 && ctx.measureText(t + '…').width > maxWidth) t = t.slice(0, -1);
+  return t + '…';
+}
+
+function _cardColor(pct) {
+  if (pct == null) return '#8a9bb0';
+  if (pct >= 95) return '#ffd700';
+  if (pct >= 85) return '#e040fb';
+  if (pct >= 75) return '#4caf50';
+  if (pct >= 60) return '#4a9eff';
+  if (pct >= 40) return '#ff9800';
+  return '#8a9bb0';
+}
+
+function _cardLabel(pct) {
+  if (pct == null) return '';
+  if (pct >= 95) return 'GM';
+  if (pct >= 85) return 'M';
+  if (pct >= 75) return 'A';
+  if (pct >= 60) return 'B';
+  if (pct >= 40) return 'C';
+  return 'D';
+}
+
+function _dividerLine(ctx, x, y, w) {
+  ctx.save();
+  ctx.strokeStyle = '#2a2d3a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x, y + 0.5);
+  ctx.lineTo(x + w, y + 0.5);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function _downloadPng(canvas, name) {
+  canvas.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (name || 'card').replace(/[^a-z0-9._-]/gi, '_') + '.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 'image/png');
+}
+
+function exportMatchCard(match) {
+  const DPR = 2, F = 'system-ui,-apple-system,sans-serif';
+  const W = 320, PAD = 16, SP = 22; // SP = shadow bleed padding
+
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = `bold 13px ${F}`;
+  const nameLines  = _wrapText(probe, match.match_name || '', W - PAD * 2);
+  const scorePct   = match.div_pct ?? match.overall_pct;
+  const hasScore   = scorePct != null;
+  const showOverall = match.overall_pct != null && match.div_pct != null
+                     && Math.abs(match.overall_pct - match.div_pct) > 0.1;
+  const hasStages  = match.stages?.length > 0;
+
+  let H = PAD;
+  H += nameLines.length * 16;
+  H += 4 + 14;                           // gap + meta row
+  if (hasScore) {
+    H += 10 + 30;                         // gap + big score
+    if (showOverall) H += 14;
+    H += 8;
+  }
+  if (hasStages) { H += 1 + 8 + match.stages.length * 20 + 6; }
+  H += 1 + 8 + 14 + PAD;                 // footer divider + footer + pad
+
+  const canvas = document.createElement('canvas');
+  canvas.width  = (W + SP * 2) * DPR;
+  canvas.height = (H + SP * 2) * DPR;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(DPR, DPR);
+
+  const ox = SP, oy = SP;
+
+  // drop shadow + card fill
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 4;
+  _rrPath(ctx, ox, oy, W, H, 8);
+  ctx.fillStyle = '#1a1d27';
+  ctx.fill();
+  ctx.restore();
+
+  // border
+  _rrPath(ctx, ox + 0.5, oy + 0.5, W - 1, H - 1, 8);
+  ctx.strokeStyle = '#2a2d3a'; ctx.lineWidth = 1; ctx.stroke();
+
+  // clip to card
+  ctx.save();
+  _rrPath(ctx, ox, oy, W, H, 8);
+  ctx.clip();
+
+  let y = oy + PAD;
+
+  // match name
+  ctx.font = `bold 13px ${F}`; ctx.fillStyle = '#fff';
+  nameLines.forEach(l => { ctx.fillText(l, ox + PAD, y + 12); y += 16; });
+  y += 4;
+
+  // meta: date · division/class
+  ctx.font = `11px ${F}`; ctx.fillStyle = '#888';
+  const meta = [match.date, [match.division, match.class_].filter(Boolean).join('/')].filter(Boolean).join(' · ');
+  ctx.fillText(meta, ox + PAD, y + 10);
+  y += 14;
+
+  // score
+  if (hasScore) {
+    y += 10;
+    const color = _cardColor(scorePct), label = _cardLabel(scorePct);
+    ctx.font = `bold 28px ${F}`; ctx.fillStyle = color;
+    const ps = scorePct.toFixed(1) + '%';
+    ctx.fillText(ps, ox + PAD, y + 24);
+    const pw = ctx.measureText(ps).width;
+    ctx.font = `bold 12px ${F}`; ctx.fillStyle = color;
+    ctx.fillText(label, ox + PAD + pw + 6, y + 20);
+    ctx.font = `9px ${F}`; ctx.fillStyle = '#555';
+    ctx.fillText(match.div_pct != null ? 'div %' : 'overall %', ox + PAD + pw + 6, y + 30);
+    y += 30;
+    if (showOverall) {
+      ctx.font = `11px ${F}`; ctx.fillStyle = '#888';
+      ctx.fillText(`overall: ${match.overall_pct.toFixed(1)}%`, ox + PAD, y + 10);
+      y += 14;
+    }
+    y += 8;
+  }
+
+  // stage rows
+  if (hasStages) {
+    _dividerLine(ctx, ox + PAD, y, W - PAD * 2); y += 8;
+    // right-hand columns: pct right-aligned at card edge, HF right-aligned 52px left of pct
+    const pctX = ox + W - PAD;
+    const hfX  = pctX - 52;
+    // name can extend up to (HF left edge minus gap); HF text ~34px wide + 14px breathing room
+    const nameMaxW = hfX - 50 - (ox + PAD);
+    match.stages.forEach(s => {
+      const clf = isClassifierStage(s);
+      const pct = clf && s.clf_pct != null ? s.clf_pct : s.pct;
+      ctx.font = clf ? `bold 11px ${F}` : `11px ${F}`;
+      ctx.fillStyle = clf ? '#4a9eff' : '#ccc';
+      const nm = (clf ? `CM ${clf.number} · ` : '') + normalizeStgName(s.name);
+      ctx.fillText(_trunc(ctx, nm, nameMaxW), ox + PAD, y + 10);
+      ctx.font = `11px ${F}`;
+      ctx.fillStyle = '#555';
+      const hfStr = s.hf != null ? s.hf.toFixed(4) : '—';
+      ctx.fillText(hfStr, hfX - ctx.measureText(hfStr).width, y + 10);
+      ctx.fillStyle = _cardColor(pct);
+      const pStr = pct != null ? pct.toFixed(1) + '%' : '—';
+      ctx.fillText(pStr, pctX - ctx.measureText(pStr).width, y + 10);
+      y += 20;
+    });
+    y += 6;
+  }
+
+  // footer
+  _dividerLine(ctx, ox + PAD, y, W - PAD * 2); y += 8;
+  ctx.font = `10px ${F}`; ctx.fillStyle = '#444';
+  ctx.fillText('PScharts', ox + W - PAD - ctx.measureText('PScharts').width, y + 10);
+
+  ctx.restore();
+  _downloadPng(canvas, [match.match_name || 'match', match.date].filter(Boolean).join(' '));
+}
+
+function exportStageCard(match, stage) {
+  const DPR = 2, F = 'system-ui,-apple-system,sans-serif';
+  const W = 280, PAD = 14, SP = 22;
+
+  const clf         = isClassifierStage(stage);
+  const officialPct = clf && stage.clf_pct != null ? stage.clf_pct : null;
+  const displayPct  = officialPct ?? stage.pct;
+  const showMatchPct = officialPct != null && stage.pct != null;
+  const hits = [
+    stage.a  > 0 && { t: `${stage.a}A`,   c: '#4caf50' },
+    stage.c  > 0 && { t: `${stage.c}C`,   c: '#fdd835' },
+    stage.d  > 0 && { t: `${stage.d}D`,   c: '#ff9800' },
+    stage.m  > 0 && { t: `${stage.m}M`,   c: '#f44336' },
+    stage.ns > 0 && { t: `${stage.ns}NS`, c: '#f44336' },
+    stage.p  > 0 && { t: `${stage.p}P`,   c: '#f44336' },
+  ].filter(Boolean);
+
+  let H = PAD;
+  if (clf)         H += 14;
+  H += 16 + 8;                          // stage name + gap
+  H += 1 + 10;                          // divider + gap
+  if (displayPct != null) {
+    H += 32;
+    if (showMatchPct) H += 14;
+  }
+  H += 10 + 1 + 8;                      // gap + divider
+  H += 14;                               // HF/time
+  if (hits.length) H += 14;
+  H += 8 + 1 + 8 + 14 + PAD;           // gap + footer
+
+  const canvas = document.createElement('canvas');
+  canvas.width  = (W + SP * 2) * DPR;
+  canvas.height = (H + SP * 2) * DPR;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(DPR, DPR);
+
+  const ox = SP, oy = SP;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 4;
+  _rrPath(ctx, ox, oy, W, H, 8);
+  ctx.fillStyle = '#1a1d27'; ctx.fill();
+  ctx.restore();
+
+  _rrPath(ctx, ox + 0.5, oy + 0.5, W - 1, H - 1, 8);
+  ctx.strokeStyle = '#2a2d3a'; ctx.lineWidth = 1; ctx.stroke();
+
+  ctx.save();
+  _rrPath(ctx, ox, oy, W, H, 8);
+  ctx.clip();
+
+  let y = oy + PAD;
+
+  // classifier badge
+  if (clf) {
+    ctx.font = `bold 11px ${F}`; ctx.fillStyle = '#4a9eff';
+    ctx.fillText(`CM ${clf.number}`, ox + PAD, y + 10);
+    y += 14;
+  }
+
+  // stage name
+  ctx.font = `bold 13px ${F}`; ctx.fillStyle = '#fff';
+  ctx.fillText(_trunc(ctx, normalizeStgName(stage.name), W - PAD * 2), ox + PAD, y + 12);
+  y += 16; y += 8;
+
+  _dividerLine(ctx, ox + PAD, y, W - PAD * 2); y += 10;
+
+  // big pct
+  if (displayPct != null) {
+    const color = _cardColor(displayPct), label = _cardLabel(displayPct);
+    ctx.font = `bold 28px ${F}`; ctx.fillStyle = color;
+    const ps = displayPct.toFixed(1) + '%';
+    ctx.fillText(ps, ox + PAD, y + 26);
+    const pw = ctx.measureText(ps).width;
+    ctx.font = `bold 13px ${F}`; ctx.fillStyle = color;
+    ctx.fillText(label, ox + PAD + pw + 6, y + 22);
+    y += 32;
+    if (showMatchPct) {
+      ctx.font = `11px ${F}`; ctx.fillStyle = '#666';
+      ctx.fillText(`match: ${stage.pct.toFixed(1)}%`, ox + PAD, y + 10);
+      y += 14;
+    }
+  }
+  y += 10;
+
+  _dividerLine(ctx, ox + PAD, y, W - PAD * 2); y += 8;
+
+  // HF + time
+  ctx.font = `11px ${F}`; ctx.fillStyle = '#888';
+  const stats = [
+    stage.hf   != null && `HF: ${stage.hf.toFixed(4)}`,
+    stage.time != null && `Time: ${stage.time.toFixed(2)}s`,
+  ].filter(Boolean).join('   ');
+  if (stats) ctx.fillText(stats, ox + PAD, y + 10);
+  y += 14;
+
+  // hit counts
+  if (hits.length) {
+    let hx = ox + PAD;
+    hits.forEach(h => {
+      ctx.font = `11px ${F}`; ctx.fillStyle = h.c;
+      ctx.fillText(h.t, hx, y + 10);
+      hx += ctx.measureText(h.t + '  ').width;
+    });
+    y += 14;
+  }
+  y += 8;
+
+  // footer
+  _dividerLine(ctx, ox + PAD, y, W - PAD * 2); y += 8;
+  ctx.font = `10px ${F}`;
+  ctx.fillStyle = '#555';
+  const fl = _trunc(ctx, [match.match_name, match.date].filter(Boolean).join(' · '), W - PAD * 2 - 68);
+  ctx.fillText(fl, ox + PAD, y + 10);
+  ctx.fillStyle = '#444';
+  ctx.fillText('PScharts', ox + W - PAD - ctx.measureText('PScharts').width, y + 10);
+
+  ctx.restore();
+  const stageBase = clf ? `CM ${clf.number} ${normalizeStgName(stage.name)}` : normalizeStgName(stage.name) || 'stage';
+  _downloadPng(canvas, [stageBase, match.date].filter(Boolean).join(' '));
+}
+
+function exportChartCSV() {
+  const uspsaBase = allResults.filter(r => isChartable(r) && !deselectedMatches.has(r.match_id));
+  const chartable = currentView === 'ranked'
+    ? uspsaBase.filter(r => r.found_by === 'member_number' && r.overall_pct != null)
+    : uspsaBase.filter(r => r.overall_pct != null || r.hf != null);
+  const sorted = [...chartable].sort((a, b) => {
+    const da = parseDate(a.date), db = parseDate(b.date);
+    return (da && db) ? da - db : 0;
+  });
+  const viewSorted = sorted.filter(r =>
+    (!selectedDiv       || (r.division || 'Unknown') === selectedDiv) &&
+    (!selectedYear      || r.date?.startsWith(selectedYear)) &&
+    (!selectedDateRange || (r.date >= selectedDateRange.start && r.date <= selectedDateRange.end))
+  );
+
+  // Flat format: one row per stage (match-level fields repeated).
+  // In classifiersOnly mode, only classifier stages are included.
+  const headers = [
+    'Date','Match','Division','Class','Overall %','Div %','Place','Div Place',
+    'Stage','Stage HF','Stage Match %','Stage Time','A','C','D','M','NS','P',
+    'CM #','CM Name','USPSA %',
+  ];
+  const rows = [headers];
+
+  for (const r of viewSorted) {
+    const matchCols = [
+      r.date         || '',
+      r.match_name   || '',
+      r.division     || '',
+      r.class_       || '',
+      r.overall_pct  != null ? r.overall_pct.toFixed(2)  : '',
+      r.div_pct      != null ? r.div_pct.toFixed(2)      : '',
+      r.place        != null ? r.place                    : '',
+      r.div_place    != null ? r.div_place                : '',
+    ];
+
+    if (!r.stages?.length) {
+      if (!classifiersOnly) rows.push([...matchCols, '', '', '', '', '', '', '', '', '', '', '', '']);
+      continue;
+    }
+
+    for (const s of r.stages) {
+      const clf = isClassifierStage(s);
+      if (classifiersOnly && !clf) continue;
+      rows.push([
+        ...matchCols,
+        s.name  || '',
+        s.hf    != null ? s.hf.toFixed(4)   : '',
+        s.pct   != null ? s.pct.toFixed(2)  : '',
+        s.time  != null ? s.time.toFixed(2) : '',
+        s.a  ?? '', s.c  ?? '', s.d  ?? '',
+        s.m  ?? '', s.ns ?? '', s.p  ?? '',
+        clf?.number || '',
+        clf?.name   || '',
+        s.clf_pct != null ? s.clf_pct.toFixed(2) : '',
+      ]);
+    }
+  }
+
+  const csv      = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const dateTag  = selectedDateRange
+    ? `${selectedDateRange.start} to ${selectedDateRange.end}`
+    : selectedYear || 'all time';
+  const filename = (classifiersOnly ? 'pscharts_classifiers' : 'pscharts_scores') + ` ${dateTag}.csv`;
+  const blob     = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url      = URL.createObjectURL(blob);
+  const a        = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('exportCsvBtn').addEventListener('click', exportChartCSV);
 
 async function refreshSingleMatch(match, btn) {
   btn.disabled = true;
@@ -1428,7 +1934,7 @@ function drawMultiSeriesChart(canvas, seriesArr, allDates, opts = {}) {
                 const clfBadge = clf ? `<span class="classifier-badge" title="${clf.name ? clf.name + ' — ' : ''}CM ${clf.number}">CM ${clf.number}</span>` : '';
                 return `
                 <div class="tt-stage-row">
-                  <span class="tt-stage-name">${clfBadge}${s.name}</span>
+                  <span class="tt-stage-name">${clfBadge}${normalizeStgName(s.name)}</span>
                   <span class="tt-stage-hf">${s.hf != null ? s.hf.toFixed(4) : '—'}</span>
                   <span class="tt-stage-hits">${s.a ? '<span style="color:#4caf50">' + s.a + 'A</span> ' : ''}${s.c ? '<span style="color:#fdd835">' + s.c + 'C</span> ' : ''}${s.d ? '<span style="color:#ff9800">' + s.d + 'D</span>' : ''}${s.m ? ' <span style="color:#f44336;font-weight:600">' + s.m + 'M</span>' : ''}${s.ns ? ' <span style="color:#f44336;font-weight:600">' + s.ns + 'NS</span>' : ''}${s.p ? ' <span style="color:#f44336">' + s.p + 'P</span>' : ''}</span>
                 </div>`;

@@ -497,7 +497,7 @@ async function fetchStageData(tabId, matchId, memberNumber, name, divKey, stageO
     if (!page?._found) { push(`     ${opt.text}: not found`); continue; }
 
     const d = page.competitorData;
-    const stageName = opt.text.replace(/^stage\s*\d+\s*[:\-–]\s*/i, '').trim() || opt.text;
+    const stageName = opt.text.replace(/^stage\s*\d+\s*[:\-–]?\s*/i, '').trim() || opt.text;
     const stageNum  = parseInt(opt.text.match(/\d+/)?.[0]) || stages.length + 1;
 
     stages.push({
