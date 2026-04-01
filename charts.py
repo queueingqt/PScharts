@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from scraper import MatchResult
+from fetcher import MatchResult
 
 
 def results_to_dataframe(results: list[MatchResult]) -> pd.DataFrame:

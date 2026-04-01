@@ -9,7 +9,7 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-from scraper import PractiScoreScraper, MatchResult
+from fetcher import PractiScoreFetcher, MatchResult
 from charts import (
     results_to_dataframe,
     chart_pct_over_time,
@@ -85,8 +85,8 @@ with st.sidebar:
 
 
 # ── Fetch logic (synchronous — runs in main thread with st.status) ─────────────
-def run_scraper(username: str, password: str, member_number: str, competitor_name: str, headless: bool, write_fn):
-    """Run the scraper synchronously, calling write_fn() for live status lines."""
+def run_fetcher(username: str, password: str, member_number: str, competitor_name: str, headless: bool, write_fn):
+    """Run the fetcher synchronously, calling write_fn() for live status lines."""
     log = []
     results = []
     error = None
@@ -96,11 +96,11 @@ def run_scraper(username: str, password: str, member_number: str, competitor_nam
         write_fn(msg)
 
     try:
-        with PractiScoreScraper(headless=headless, status_callback=status) as scraper:
+        with PractiScoreFetcher(headless=headless, status_callback=status) as fetcher:
             status("Opening browser…")
 
             if username and password:
-                ok = scraper.login(username, password)
+                ok = fetcher.login(username, password)
                 if ok:
                     status("Logged in successfully.")
                 else:
@@ -109,10 +109,10 @@ def run_scraper(username: str, password: str, member_number: str, competitor_nam
                 status("No credentials — searching without login.")
 
             status(f"Searching for: {competitor_name or member_number}")
-            results = scraper.get_results_for_member(member_number, competitor_name)
+            results = fetcher.get_results_for_member(member_number, competitor_name)
 
             if not results:
-                snap = scraper.get_page_snapshot()
+                snap = fetcher.get_page_snapshot()
                 status(f"Last page: {snap['url']}")
                 status(f"Captured JSON responses: {snap['captured_json_count']}")
                 for u in snap["captured_json_urls"][:10]:
@@ -134,7 +134,7 @@ if fetch_btn:
         st.session_state.error = None
 
         with st.status("Fetching results…", expanded=True) as status_box:
-            results, log, error = run_scraper(
+            results, log, error = run_fetcher(
                 username, password, member_number, competitor_name, headless,
                 write_fn=st.write,
             )
@@ -157,7 +157,7 @@ if st.session_state.error:
 
 if st.session_state.log:
     with st.expander(
-        "Scraper Log",
+        "Fetch Log",
         expanded=not st.session_state.results,
     ):
         st.code("\n".join(st.session_state.log), language=None)
@@ -171,7 +171,7 @@ if results is not None:
             "- Login failed (check credentials)\n"
             "- PractiScore changed its site layout\n"
             "- The member number was not recognized\n\n"
-            "Try unchecking **Headless browser** to watch the scraper live."
+            "Try unchecking **Headless browser** to watch the fetcher live."
         )
     else:
         df = results_to_dataframe(results)

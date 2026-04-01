@@ -136,7 +136,7 @@ function buildResult(match, score, memberNumber) {
   };
 }
 
-// ── results/new/{matchId} scraper — injected into tab ─────────────────────────
+// ── results/new/{matchId} reader — injected into tab ──────────────────────────
 // Reads the dynamically-rendered table in #mainResultsDiv plus the dropdown
 // options for #resultLevel and #divisionLevel.
 function getResultsNewState(mem, nm) {
@@ -301,9 +301,9 @@ function setSelectAndFire(selectId, value) {
   return true;
 }
 
-// ── HTML results page scraper — injected into tab, no external references ─────
+// ── HTML results page reader — injected into tab, no external references ──────
 // (kept as fallback for stage data on static pages)
-function scrapeHTMLResultsPage(mem, nm) {
+function fetchHTMLResultsPage(mem, nm) {
   const isCF = /challenge|security|just a moment/i.test(document.title) ||
                !!document.querySelector('#cf-challenge-running, #challenge-form');
   if (isCF) return { _cf: true };
@@ -521,9 +521,9 @@ async function fetchStageData(tabId, matchId, memberNumber, name, divKey, stageO
   return stages.length ? stages : null;
 }
 
-// ── USPSA.org classification page scraper ─────────────────────────────────────
+// ── USPSA.org classification page reader ──────────────────────────────────────
 // Injected into uspsa.org/classification/[memberNumber]
-function scrapeUSPSAClassificationPage() {
+function fetchUSPSAClassificationPage() {
   const url = window.location.href;
 
   // Login detection
@@ -650,7 +650,7 @@ async function fetchUSPSAClassification(memberNumber, push) {
     await waitForTabLoad(tabId);
     await sleep(2000);
 
-    const state = await runInTab(tabId, scrapeUSPSAClassificationPage);
+    const state = await runInTab(tabId, fetchUSPSAClassificationPage);
 
     if (state?._not_logged_in) {
       push('  Not logged into USPSA.org — classification data unavailable');

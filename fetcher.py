@@ -1,5 +1,5 @@
 """
-PractiScore scraper using Playwright for browser automation.
+PractiScore fetcher using Playwright for browser automation.
 
 Primary flow:
   1. Login to practiscore.com
@@ -35,7 +35,7 @@ class MatchResult:
     raw: dict = field(default_factory=dict)
 
 
-class PractiScoreScraper:
+class PractiScoreFetcher:
     BASE_URL = "https://practiscore.com"
 
     def __init__(self, headless: bool = True, status_callback=None):
