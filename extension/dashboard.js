@@ -1258,7 +1258,7 @@ function _downloadPng(canvas, name) {
 
 function exportMatchCard(match) {
   const DPR = 2, F = 'system-ui,-apple-system,sans-serif';
-  const W = 320, PAD = 16, SP = 22; // SP = shadow bleed padding
+  const W = 320, PAD = 16;
 
   const probe = document.createElement('canvas').getContext('2d');
   probe.font = `bold 13px ${F}`;
@@ -1271,39 +1271,28 @@ function exportMatchCard(match) {
 
   let H = PAD;
   H += nameLines.length * 16;
-  H += 4 + 14;                           // gap + meta row
+  H += 4 + 14;
   if (hasScore) {
-    H += 10 + 30;                         // gap + big score
+    H += 10 + 30;
     if (showOverall) H += 14;
     H += 8;
   }
   if (hasStages) { H += 1 + 8 + match.stages.length * 20 + 6; }
-  H += 1 + 8 + 14 + PAD;                 // footer divider + footer + pad
+  H += 1 + 8 + 14 + PAD;
 
   const canvas = document.createElement('canvas');
-  canvas.width  = (W + SP * 2) * DPR;
-  canvas.height = (H + SP * 2) * DPR;
+  canvas.width  = W * DPR;
+  canvas.height = H * DPR;
   const ctx = canvas.getContext('2d');
   ctx.scale(DPR, DPR);
 
-  const ox = SP, oy = SP;
+  const ox = 0, oy = 0;
 
-  // drop shadow + card fill
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 4;
-  _rrPath(ctx, ox, oy, W, H, 8);
+  // card fill + border
   ctx.fillStyle = '#1a1d27';
-  ctx.fill();
-  ctx.restore();
-
-  // border
-  _rrPath(ctx, ox + 0.5, oy + 0.5, W - 1, H - 1, 8);
-  ctx.strokeStyle = '#2a2d3a'; ctx.lineWidth = 1; ctx.stroke();
-
-  // clip to card
-  ctx.save();
-  _rrPath(ctx, ox, oy, W, H, 8);
-  ctx.clip();
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#2a2d3a'; ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
 
   let y = oy + PAD;
 
@@ -1371,13 +1360,12 @@ function exportMatchCard(match) {
   ctx.font = `10px ${F}`; ctx.fillStyle = '#444';
   ctx.fillText('PScharts', ox + W - PAD - ctx.measureText('PScharts').width, y + 10);
 
-  ctx.restore();
   _downloadPng(canvas, [match.match_name || 'match', match.date].filter(Boolean).join(' '));
 }
 
 function exportStageCard(match, stage) {
   const DPR = 2, F = 'system-ui,-apple-system,sans-serif';
-  const W = 280, PAD = 14, SP = 22;
+  const W = 280, PAD = 14;
 
   const clf         = isClassifierStage(stage);
   const officialPct = clf && stage.clf_pct != null ? stage.clf_pct : null;
@@ -1406,25 +1394,18 @@ function exportStageCard(match, stage) {
   H += 8 + 1 + 8 + 14 + PAD;           // gap + footer
 
   const canvas = document.createElement('canvas');
-  canvas.width  = (W + SP * 2) * DPR;
-  canvas.height = (H + SP * 2) * DPR;
+  canvas.width  = W * DPR;
+  canvas.height = H * DPR;
   const ctx = canvas.getContext('2d');
   ctx.scale(DPR, DPR);
 
-  const ox = SP, oy = SP;
+  const ox = 0, oy = 0;
 
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 4;
-  _rrPath(ctx, ox, oy, W, H, 8);
-  ctx.fillStyle = '#1a1d27'; ctx.fill();
-  ctx.restore();
-
-  _rrPath(ctx, ox + 0.5, oy + 0.5, W - 1, H - 1, 8);
-  ctx.strokeStyle = '#2a2d3a'; ctx.lineWidth = 1; ctx.stroke();
-
-  ctx.save();
-  _rrPath(ctx, ox, oy, W, H, 8);
-  ctx.clip();
+  // card fill + border
+  ctx.fillStyle = '#1a1d27';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#2a2d3a'; ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
 
   let y = oy + PAD;
 
@@ -1492,7 +1473,6 @@ function exportStageCard(match, stage) {
   ctx.fillStyle = '#444';
   ctx.fillText('PScharts', ox + W - PAD - ctx.measureText('PScharts').width, y + 10);
 
-  ctx.restore();
   const stageBase = clf ? `CM ${clf.number} ${normalizeStgName(stage.name)}` : normalizeStgName(stage.name) || 'stage';
   _downloadPng(canvas, [stageBase, match.date].filter(Boolean).join(' '));
 }
